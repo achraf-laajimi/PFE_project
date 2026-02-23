@@ -1,0 +1,59 @@
+"""Intent classification"""
+
+from agent.utils.llm_service import LLMService
+from agent.utils.schemas import IntentClassification
+from functools import lru_cache
+from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
+
+@lru_cache(maxsize=1)
+def _load_prompt() -> str:
+    """Load intent prompt template (cached)"""
+    path = Path(__file__).parent.parent / "prompts" / "intent.txt"
+    return path.read_text(encoding='utf-8')
+
+def classify_intent(query: str, llm: LLMService, conversation_context: str = "") -> IntentClassification:
+    """
+    Classify user intent using LLM
+    
+    Args:
+        query: User query string
+        llm: LLM service instance
+        conversation_context: Recent conversation history for resolving
+                              follow-up queries and anaphora
+    
+    Returns:
+        IntentClassification object
+    """
+    
+    logger.info(f"Classifying intent for: {query}")
+    
+    prompt_template = _load_prompt()
+    prompt = prompt_template.format(
+        query=query,
+        conversation_context=conversation_context or "(no previous conversation)",
+    )
+    
+    try:
+        response = llm.generate(
+            prompt=prompt,
+            temperature=0.1  # Low temp for consistent classification
+        )
+        
+        result_dict = llm.extract_json(response)
+        intent = IntentClassification(**result_dict)
+        
+        logger.info(f"Intent classified as: {intent.intent} (confidence: {intent.confidence})")
+        return intent
+    
+    except Exception as e:
+        logger.warning(f"Intent classification failed: {e}, defaulting to tool_required")
+        # Safe fallback
+        return IntentClassification(
+            intent="tool_required",
+            reasoning=f"Failed to classify: {e}",
+            entities=[],
+            confidence=0.5
+        )
