@@ -3,6 +3,32 @@
 const chatMessages = document.getElementById('chatMessages');
 const messageInput = document.getElementById('messageInput');
 
+// Session config
+const STUDENT_ID = "239645";  // Chayma — demo student
+const SESSION_ID = "session_" + Date.now();  // unique per browser tab
+
+// ── Markdown rendering helpers ──────────────────────────────
+
+function renderMarkdown(text) {
+    // Use marked.js to convert markdown → HTML
+    if (typeof marked !== 'undefined') {
+        marked.setOptions({ breaks: true, gfm: true });
+        return marked.parse(text);
+    }
+    // Fallback: basic manual conversion
+    return text
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/- (.+)/g, '<li>$1</li>')
+        .replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>')
+        .replace(/\n/g, '<br>');
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 // Auto responses based on keywords
 const responses = {
     'مرحبا': 'مرحباً بك! 😊 كيف يمكنني مساعدتك اليوم؟',
@@ -33,7 +59,11 @@ async function sendMessage() {
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ message: message })
+            body: JSON.stringify({
+                message: message,
+                student_id: STUDENT_ID,
+                session_id: SESSION_ID
+            })
         });
 
         if (!response.ok) throw new Error('Network response was not ok');
@@ -56,10 +86,13 @@ function addMessage(text, sender) {
     const avatar = sender === 'bot' ? '🤖' : '👤';
     const time = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
 
+    // Render markdown for bot messages, plain text for user
+    const rendered = sender === 'bot' ? renderMarkdown(text) : escapeHtml(text);
+
     messageDiv.innerHTML = `
         <div class="message-avatar">${avatar}</div>
         <div class="message-content">
-            <div class="message-bubble">${text}</div>
+            <div class="message-bubble">${rendered}</div>
             <div class="message-time">${time}</div>
         </div>
     `;

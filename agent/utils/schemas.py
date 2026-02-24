@@ -39,5 +39,5 @@ class ToolResult(BaseModel):
     """Result from tool execution"""
     tool_name: str
     success: bool
-    data: Dict[str, Any]
+    data: Any = None
     error: Optional[str] = None

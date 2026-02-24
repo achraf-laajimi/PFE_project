@@ -20,15 +20,19 @@ PLATFORM VOCABULARY (these words/concepts always mean "tool_required"):
 - توصيات / recommendations / نصائح
 
 RULES:
-1. Greetings, thanks, "how are you", off-topic → "chitchat".
+1. Greetings, thanks, "how are you" (without mentioning a student) → "chitchat".
 2. Asks about grades, exercises, mastery, recommendations, progress → "tool_required".
-3. Extract student names and subject names from the query. Do NOT invent entities.
-4. If uncertain, prefer "tool_required" over "chitchat".
+3. If the query mentions a STUDENT NAME or refers to "ابني/ابنتي/طفلي" (my child), it is ALWAYS "tool_required" — even if phrased like a greeting ("كيفاش حال شيماء", "شنوة أخبار ابني").
+4. Extract student names and subject names from the query. Do NOT invent entities.
+5. If uncertain, prefer "tool_required" over "chitchat".
 
 ===== EXAMPLES =====
 
 Query: "مرحبا"
-{{"intent": "chitchat", "reasoning": "Greeting", "subject": null, "entities": [], "confidence": 0.99}}
+{{"intent": "chitchat", "reasoning": "Greeting with no student reference", "subject": null, "entities": [], "confidence": 0.99}}
+
+Query: "كيفاش حال شيماء؟"
+{{"intent": "tool_required", "reasoning": "Asking about Chayma's status — student name mentioned, needs data", "subject": null, "entities": ["شيماء"], "confidence": 0.95}}
 
 Query: "كيفاش أحمد في الرياضيات؟"
 {{"intent": "tool_required", "reasoning": "Asking about Ahmed's maths performance", "subject": "maths", "entities": ["أحمد", "maths"], "confidence": 0.95}}

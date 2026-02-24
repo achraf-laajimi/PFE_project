@@ -91,11 +91,23 @@ class ClassQuizAgent:
                 )
                 return self._ok(response, "chitchat", [])
 
+            # Guard: tools unavailable — skip planning
+            if not self.tools_schema:
+                logger.warning("No tools loaded — cannot fulfil tool_required intent")
+                response = "عذراً، الخدمة غير متوفرة حالياً. يرجى المحاولة لاحقاً."
+                self.memory.add_turn(
+                    session_id, query, response,
+                    entities=intent.entities, intent="error",
+                )
+                return self._ok(response, "error", [])
+
             # Merge entities: fresh from intent + recent from memory
             all_entities = list(dict.fromkeys(intent.entities + recent_entities))
 
             # ② DAG planning (LLM #2) ────────────────────────────
             student_id = context.get("student_id") if context else None
+            if not student_id:
+                student_id = self.memory.get_last_student_id(session_id)
             plan = create_dag_plan(
                 query=query,
                 entities=all_entities,

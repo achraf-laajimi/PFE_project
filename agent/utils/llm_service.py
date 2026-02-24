@@ -2,10 +2,16 @@
 
 import json
 import os
+from pathlib import Path
 from typing import Dict, Optional
 import logging
 
+from dotenv import load_dotenv
 from openai import OpenAI
+
+# Load .env from agent/ directory (where the key lives)
+_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(_ENV_PATH)
 
 logger = logging.getLogger(__name__)
 

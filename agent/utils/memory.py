@@ -24,6 +24,8 @@ class MemoryManager:
         self._max = max_history
         # session_id → list of Turn dicts
         self._store: Dict[str, List[Dict]] = defaultdict(list)
+        # session_id → arbitrary context (student_id, prefs, …)
+        self._context: Dict[str, Dict] = defaultdict(dict)
 
     # ── Public API ─────────────────────────────────────────────
 
@@ -72,16 +74,37 @@ class MemoryManager:
 
     def get_last_student_id(self, session_id: str) -> Optional[str]:
         """
-        Walk backwards through history and return the most recent
-        student_id that was used in a tool call (stored in context).
+        Return the student_id for this session.
+
+        Checks context first (set explicitly via update_context),
+        then falls back to scanning turn entities.
         """
+        # Fast path: explicit context
+        ctx_id = self._context.get(session_id, {}).get("student_id")
+        if ctx_id:
+            return str(ctx_id)
+
+        # Fallback: walk backwards through history
         for turn in reversed(self._store.get(session_id, [])):
-            # student_id might be stored as an entity or in context
             for entity in turn.get("entities", []):
-                # if it looks like a student ID, return it
-                if entity.startswith("ST_"):
+                if entity.isdigit():
                     return entity
         return None
+
+    # ── Session context ───────────────────────────────────────
+
+    def update_context(self, session_id: str, data: Dict) -> None:
+        """Merge *data* into the session's context dict."""
+        self._context[session_id].update(data)
+        logger.debug(f"[Memory] Context updated for {session_id}: {list(data.keys())}")
+
+    def get_context(self, session_id: str) -> Dict:
+        """Return the full context dict for a session."""
+        return dict(self._context.get(session_id, {}))
+
+    def get_student_id(self, session_id: str) -> Optional[str]:
+        """Shortcut: return student_id from context, or None."""
+        return self._context.get(session_id, {}).get("student_id")
 
     def format_for_prompt(self, session_id: str, max_turns: int = 3) -> str:
         """

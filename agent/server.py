@@ -1,13 +1,17 @@
 """FastAPI server connecting frontend to agent"""
 
+import logging
+from contextlib import asynccontextmanager
+from typing import Optional, List
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime
-from contextlib import asynccontextmanager
+
 from agent.agent import ClassQuizAgent
-from client import client
-import logging
+from agent.client import MCPClient
+from mcp_server.server import mcp  # Direct import of local MCP server logic
 
 # Setup logging
 logging.basicConfig(
@@ -18,98 +22,83 @@ logger = logging.getLogger(__name__)
 
 # Global state
 agent_instance = None
-client_connected = False
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage agent and MCP client lifecycle"""
-    global agent_instance, client_connected
+    global agent_instance
     
-    # Startup
     try:
-        # Connect to MCP server
-        await client.__aenter__()
-        await client.ping()
-        client_connected = True
-        logger.info("✓ Connected to MCP server")
+        # 1. Initialize Client with LOCAL server (no separate process needed)
+        client = MCPClient(server_instance=mcp)
+        await client.connect()  # Open persistent MCP session
         
-        # Initialize agent
+        # 2. Initialize Agent
         agent_instance = ClassQuizAgent(mcp_client=client)
         await agent_instance.initialize()
-        logger.info("✓ Agent initialized")
         
-        # Check LLM
-        if agent_instance.llm.health_check():
-            logger.info("✓ LLM (Ollama) is available")
-        else:
-            logger.warning("✗ LLM (Ollama) not available - check if running")
-    
+        logger.info("✓ ClassQuiz API Ready: Agent connected to Local MCP Server")
+        
     except Exception as e:
         logger.error(f"✗ Startup failed: {e}")
+        raise
     
     yield
-    
-    # Shutdown
-    if client_connected:
-        await client.__aexit__(None, None, None)
-        logger.info("✓ Disconnected from MCP server")
+
+    # Cleanup: close MCP session
+    try:
+        await client.disconnect()
+    except Exception:
+        pass
 
 app = FastAPI(
     title="ClassQuiz Agent API",
-    description="Educational AI assistant with MCP tool orchestration",
-    version="1.0.0",
     lifespan=lifespan
 )
 
-# CORS configuration
+# CORS: Allow your frontend (likely running on a different port/file)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # For dev; restrict in prod
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Request/Response models
+# --- Request/Response Models ---
+
 class ChatRequest(BaseModel):
     message: str
-    student_id: str = None
-    session_id: str = "default"
+    student_id: Optional[str] = "239645"  # Default to Chayma for demo if JS doesn't send it
+    session_id: Optional[str] = "default_session"
 
 class ChatResponse(BaseModel):
     response: str
-    intent: str
-    tools_used: list
+    intent: Optional[str] = "unknown"
+    tools_used: List[str] = []
     timestamp: str
     success: bool
 
+# --- Endpoints ---
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """
-    Handle chat messages from frontend
+    global agent_instance
     
-    Flow:
-    1. Receive user message
-    2. Pass to agent for processing
-    3. Agent uses LLM to classify, plan, execute, synthesize
-    4. Return natural language response
-    """
-    
-    if not client_connected or not agent_instance:
-        raise HTTPException(
-            status_code=503,
-            detail="Service not ready. Check MCP server and Ollama."
-        )
+    if not agent_instance:
+        raise HTTPException(status_code=503, detail="Agent still initializing...")
     
     try:
-        logger.info(f"Received message: {request.message}")
+        logger.info(f"📩 Message: {request.message} | Student: {request.student_id}")
         
-        # Build context
+        # Context building
         context = {}
         if request.student_id:
             context["student_id"] = request.student_id
-        
-        # Process via agent (ALL responses are LLM-generated)
+            # Pre-load memory for this session so agent knows who it is
+            agent_instance.memory.update_context(request.session_id, {"student_id": request.student_id})
+
+        # Process Query
         result = await agent_instance.process_query(
             query=request.message,
             context=context,
@@ -118,12 +107,17 @@ async def chat(request: ChatRequest):
         
         return ChatResponse(
             response=result["response"],
-            intent=result["intent"],
+            intent=result.get("intent", "unknown"),
             tools_used=result.get("tools_used", []),
             timestamp=datetime.now().strftime("%I:%M %p"),
-            success=result["success"]
+            success=result.get("success", False)
         )
     
     except Exception as e:
-        logger.error(f"Error in /chat endpoint: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+        logger.error(f"Error in /chat: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    import uvicorn
+    # Runs on port 5000 to match your app.js
+    uvicorn.run(app, host="0.0.0.0", port=5000)

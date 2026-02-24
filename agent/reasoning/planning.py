@@ -2,6 +2,7 @@
 
 from agent.utils.schemas import DAGPlan
 from agent.utils.llm_service import LLMService
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 import json
@@ -41,6 +42,7 @@ def create_dag_plan(
         entities=json.dumps(entities, ensure_ascii=False),
         student_id=student_id or "UNKNOWN",
         history=history or "(no previous conversation)",
+        current_date=date.today().isoformat(),
     )
 
     try:

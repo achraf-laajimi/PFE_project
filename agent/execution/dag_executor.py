@@ -74,6 +74,9 @@ class DAGExecutor:
             # ── Resolve $-references ─────────────────────────
             params = self._resolve_params(task.params, results)
 
+            # ── Strip None values — let tools use their defaults ─
+            params = {k: v for k, v in params.items() if v is not None}
+
             # ── Validate params against schema ───────────────
             is_valid, error_msg = validate_tool_params(
                 task.tool, params, self.tools_schema
@@ -94,21 +97,22 @@ class DAGExecutor:
                         self.mcp_client.call_tool(task.tool, params),
                         timeout=_TASK_TIMEOUT,
                     )
-                    raw_text = result.content[0].text if result.content else "{}"
+                    try:
+                        raw_text = result.content[0].text if result.content else "{}"
+                    except (IndexError, AttributeError):
+                        raw_text = "{}"
                     parsed_json = self._try_parse_json(raw_text)
                     mapped = self._apply_output_mapping(parsed_json, task.output_mapping)
 
                     results[task.id] = {"raw": raw_text, "json": parsed_json, "mapped": mapped}
                     events[task.id].set()
 
+                    # Store clean data for synthesis (not internal wrapper)
+                    clean_data = parsed_json if parsed_json is not None else {"raw_output": raw_text}
                     tool_results.append(ToolResult(
                         tool_name=task.tool,
                         success=True,
-                        data={
-                            "raw": raw_text,
-                            "json": parsed_json,
-                            "mapped": mapped,
-                        },
+                        data=clean_data,
                     ))
                     return  # success — exit retry loop
 
@@ -262,7 +266,10 @@ class DAGExecutor:
                     return None, False
                 key, idx = m.groups()
                 try:
-                    current = current[key][int(idx)]
+                    if key:
+                        current = current[key][int(idx)]
+                    else:
+                        current = current[int(idx)]
                 except Exception:
                     return None, False
             else:

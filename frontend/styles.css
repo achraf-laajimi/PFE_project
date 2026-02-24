@@ -275,6 +275,29 @@ body {
     box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
 }
 
+/* ── Markdown inside bot bubbles ──────────────────────────── */
+.bot .message-bubble ul,
+.bot .message-bubble ol {
+    margin: 8px 20px 8px 0;
+    padding: 0 16px 0 0;
+    list-style-position: inside;
+}
+.bot .message-bubble li {
+    margin-bottom: 4px;
+}
+.bot .message-bubble p {
+    margin: 4px 0;
+}
+.bot .message-bubble strong {
+    color: #5a3ec8;
+}
+.bot .message-bubble h3,
+.bot .message-bubble h4 {
+    margin: 8px 0 4px;
+    font-size: 15px;
+    color: #444;
+}
+
 .message-time {
     font-size: 12px;
     opacity: 0.6;
