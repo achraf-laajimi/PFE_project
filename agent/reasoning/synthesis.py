@@ -1,14 +1,14 @@
 """Response synthesis"""
 
 from agent.utils.llm_service import LLMService
+from agent.utils.logger import get_logger
 from agent.utils.schemas import ToolResult
 from functools import lru_cache
 from pathlib import Path
 from typing import List
 import json
-import logging
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 @lru_cache(maxsize=1)
 def _load_synthesis_prompt() -> str:

@@ -1,6 +1,5 @@
 """FastAPI server connecting frontend to agent"""
 
-import logging
 from contextlib import asynccontextmanager
 from typing import Optional, List
 
@@ -11,14 +10,10 @@ from datetime import datetime
 
 from agent.agent import ClassQuizAgent
 from agent.client import MCPClient
+from agent.utils.logger import get_logger
 from mcp_server.server import mcp  # Direct import of local MCP server logic
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Global state
 agent_instance = None
@@ -45,7 +40,11 @@ async def lifespan(app: FastAPI):
     
     yield
 
-    # Cleanup: close MCP session
+    # Cleanup: flush pending Mem0 writes, then close MCP session
+    try:
+        await agent_instance.memory.shutdown()
+    except Exception:
+        pass
     try:
         await client.disconnect()
     except Exception:

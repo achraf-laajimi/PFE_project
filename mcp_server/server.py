@@ -9,9 +9,9 @@ Start with:  python -m mcp_server.server
 
 from fastmcp import FastMCP
 import asyncio
-import logging
 from typing import Optional
 
+from mcp_server.helpers.logger import get_logger
 from mcp_server.tools.parent_assist_tools import (
     build_student_global_data,
     build_subject_curriculum_progress,
@@ -19,11 +19,7 @@ from mcp_server.tools.parent_assist_tools import (
     build_diagnostics_and_recommendations,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 mcp = FastMCP("CQ_MCP")
 

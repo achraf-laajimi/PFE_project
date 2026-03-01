@@ -1,9 +1,10 @@
 """Tool parameter validation"""
 
 from typing import Dict, Any, Tuple
-import logging
 
-logger = logging.getLogger(__name__)
+from agent.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def _resolve_type(param_info: dict) -> str | None:

@@ -1,3 +1,5 @@
 fastmcp
 openai
 python-dotenv
+mem0ai
+qdrant-client

@@ -10,12 +10,13 @@ Usage in agent/server.py:
 """
 
 import asyncio
-import logging
 from typing import Any, Dict, Optional
 
 from fastmcp import Client
 
-logger = logging.getLogger(__name__)
+from agent.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class MCPClient:

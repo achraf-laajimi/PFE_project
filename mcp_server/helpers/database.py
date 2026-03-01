@@ -7,11 +7,12 @@ can reshape them into their own response schemas.
 
 import csv
 import json
-import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
+from mcp_server.helpers.logger import get_logger
+
+logger = get_logger(__name__)
 
 # ── Paths ────────────────────────────────────────────────────
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -118,11 +119,3 @@ def _safe_int(val: Any) -> Optional[int]:
         return int(val)
     except (TypeError, ValueError):
         return None
-
-
-def _safe_float(val: Any) -> float:
-    """Convert to float, return 0.0 on failure."""
-    try:
-        return float(val)
-    except (TypeError, ValueError):
-        return 0.0

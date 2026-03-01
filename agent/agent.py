@@ -1,6 +1,5 @@
 """Core agent orchestrator — DAG-based parallel execution with memory"""
 
-import logging
 from typing import Dict
 
 from agent.execution.dag_executor import DAGExecutor
@@ -8,9 +7,10 @@ from agent.reasoning.intent_classification import classify_intent
 from agent.reasoning.planning import create_dag_plan
 from agent.reasoning.synthesis import synthesize_response, generate_chitchat_response
 from agent.utils.llm_service import LLMService
+from agent.utils.logger import get_logger
 from agent.utils.memory import MemoryManager
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ClassQuizAgent:
@@ -77,7 +77,7 @@ class ClassQuizAgent:
 
         try:
             # Gather recent context from memory
-            history_text = self.memory.format_for_prompt(session_id)
+            history_text = self.memory.format_for_prompt(session_id, query=query)
             recent_entities = self.memory.get_recent_entities(session_id)
 
             # ① Intent gate (LLM #1) ─── short-circuit chitchat ──

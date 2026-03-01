@@ -2,13 +2,13 @@
 
 from agent.utils.schemas import DAGPlan
 from agent.utils.llm_service import LLMService
+from agent.utils.logger import get_logger
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
 import json
-import logging
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @lru_cache(maxsize=1)

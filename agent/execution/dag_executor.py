@@ -2,14 +2,14 @@
 
 import asyncio
 import json
-import logging
 import re
 from typing import Any, Dict, List
 
 from agent.reasoning.validation import validate_tool_params
+from agent.utils.logger import get_logger
 from agent.utils.schemas import TaskNode, ToolResult
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Per-task timeout (seconds). Prevents a single stuck MCP call from blocking everything.
 _TASK_TIMEOUT = 30

@@ -1,12 +1,12 @@
 """Intent classification"""
 
 from agent.utils.llm_service import LLMService
+from agent.utils.logger import get_logger
 from agent.utils.schemas import IntentClassification
 from functools import lru_cache
 from pathlib import Path
-import logging
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 @lru_cache(maxsize=1)
 def _load_prompt() -> str:
