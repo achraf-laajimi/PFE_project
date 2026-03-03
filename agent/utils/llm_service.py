@@ -28,7 +28,8 @@ class LLMService:
                 "Set it before starting the agent."
             )
         self.model = model
-        self.client = OpenAI(api_key=api_key)
+        self.request_timeout = float(os.getenv("OPENAI_REQUEST_TIMEOUT", "45"))
+        self.client = OpenAI(api_key=api_key, timeout=self.request_timeout)
         logger.info(f"Initialized LLM service with model: {model}")
 
     def generate(
@@ -37,6 +38,7 @@ class LLMService:
         system: Optional[str] = None,
         temperature: float = 0.3,
         max_tokens: int = 1000,
+        timeout: Optional[float] = None,
     ) -> str:
         """
         Generate completion from OpenAI GPT
@@ -46,6 +48,7 @@ class LLMService:
             system: Optional system message
             temperature: Sampling temperature (0.0-1.0)
             max_tokens: Maximum tokens to generate
+            timeout: Optional per-request timeout in seconds
 
         Returns:
             Generated text
@@ -62,6 +65,7 @@ class LLMService:
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                timeout=timeout or self.request_timeout,
             )
             generated_text = response.choices[0].message.content.strip()
             logger.debug(f"LLM response length: {len(generated_text)} chars")

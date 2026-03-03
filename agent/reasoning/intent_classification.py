@@ -31,9 +31,12 @@ def classify_intent(query: str, llm: LLMService, conversation_context: str = "")
     logger.info(f"Classifying intent for: {query}")
     
     prompt_template = _load_prompt()
-    prompt = prompt_template.format(
-        query=query,
-        conversation_context=conversation_context or "(no previous conversation)",
+    # Use replace() instead of .format() so JSON examples in the template
+    # (which contain literal { }) don't trigger a KeyError.
+    prompt = (
+        prompt_template
+        .replace("{conversation_context}", conversation_context or "(no previous conversation)")
+        .replace("{query}", query)
     )
     
     try:

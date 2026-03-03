@@ -3,79 +3,99 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ClassQuiz Chatbot</title>
+    <title>ClassQuiz &#x2022; &#x645;&#x633;&#x627;&#x639;&#x62f;</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
-    <!-- Background elements -->
-    <div class="cloud cloud1"></div>
-    <div class="cloud cloud2"></div>
-    <div class="cloud cloud3"></div>
-    
-    <div class="character char1">😊</div>
-    <div class="character char2">📚</div>
-    <div class="character char3">✨</div>
+    <div id="app">
 
-    <div class="chat-container">
-        <!-- Header -->
-        <div class="chat-header">
-            <div class="header-left">
-                <div class="bot-avatar">🤖</div>
-                <div class="bot-info">
-                    <h2>مساعد ClassQuiz</h2>
-                    <div class="bot-status">
-                        <div class="status-dot"></div>
-                        <span>متصل الآن</span>
+        <!-- Sidebar -->
+        <aside id="sidebar">
+            <div class="sidebar-top">
+                <div class="sidebar-brand">
+                    <span class="brand-icon">&#x1F9E0;</span>
+                    <span class="brand-name">ClassQuiz</span>
+                </div>
+                <button class="new-chat-btn" onclick="newSession()" title="&#x645;&#x62d;&#x627;&#x62f;&#x62b;&#x629; &#x62c;&#x62f;&#x64a;&#x62f;&#x629;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                    </svg>
+                    &#x62c;&#x62f;&#x64a;&#x62f;
+                </button>
+            </div>
+            <div class="sidebar-label">&#x627;&#x644;&#x645;&#x62d;&#x627;&#x62f;&#x62b;&#x627;&#x62a;</div>
+            <ul id="sessionList"></ul>
+        </aside>
+
+        <!-- Mobile toggle -->
+        <button id="sidebarToggle" onclick="toggleSidebar()">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+            </svg>
+        </button>
+
+        <!-- Chat panel -->
+        <main class="chat-panel">
+
+            <!-- Header -->
+            <header class="chat-header">
+                <div class="chat-header-info">
+                    <div class="header-avatar">&#x1F916;</div>
+                    <div>
+                        <div class="header-title">&#x645;&#x633;&#x627;&#x639;&#x62f; ClassQuiz</div>
+                        <div class="header-status"><span class="status-dot"></span>&#x645;&#x62a;&#x635;&#x644; &#x627;&#x644;&#x622;&#x646;</div>
                     </div>
                 </div>
-            </div>
-            <div class="header-actions">
-                <button class="header-btn" onclick="toggleMenu()">⋮</button>
-            </div>
-        </div>
+                <button class="icon-btn" onclick="newSession()" title="&#x645;&#x62d;&#x627;&#x62f;&#x62b;&#x629; &#x62c;&#x62f;&#x64a;&#x62f;&#x629;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+                    </svg>
+                </button>
+            </header>
 
-        <!-- Messages Area -->
-        <div class="chat-messages" id="chatMessages">
-            <div class="message bot">
-                <div class="message-avatar">🤖</div>
-                <div class="message-content">
-                    <div class="message-bubble">
-                        مرحباً! 👋 أنا مساعدك الذكي في ClassQuiz. كيف يمكنني مساعدتك اليوم؟
+            <!-- Messages -->
+            <div class="chat-messages" id="chatMessages">
+                <div class="message bot">
+                    <div class="message-avatar">&#x1F916;</div>
+                    <div class="message-content">
+                        <div class="message-bubble">&#x645;&#x631;&#x62d;&#x628;&#x627;&#x64b;! &#x1F44B; &#x623;&#x646;&#x627; &#x645;&#x633;&#x627;&#x639;&#x62f;&#x643; &#x627;&#x644;&#x630;&#x643;&#x64a; &#x641;&#x64a; ClassQuiz. &#x643;&#x64a;&#x641; &#x64a;&#x645;&#x643;&#x646;&#x646;&#x64a; &#x645;&#x633;&#x627;&#x639;&#x62f;&#x62a;&#x643; &#x627;&#x644;&#x64a;&#x648;&#x645;&#x61f;</div>
+                        <div class="message-time">10:30 &#x635;</div>
                     </div>
-                    <div class="message-time">10:30 ص</div>
                 </div>
-            </div>
-
-            <div class="message bot">
-                <div class="message-avatar">🤖</div>
-                <div class="message-content">
-                    <div class="message-bubble">
-                        يمكنني مساعدتك في:
-                        <div class="quick-replies">
-                            <button class="quick-reply-btn" onclick="sendQuickReply('امتحانات')">📝 الامتحانات</button>
-                            <button class="quick-reply-btn" onclick="sendQuickReply('المواد الدراسية')">📚 المواد الدراسية</button>
-                            <button class="quick-reply-btn" onclick="sendQuickReply('نصائح الدراسة')">💡 نصائح الدراسة</button>
-                            <button class="quick-reply-btn" onclick="sendQuickReply('الدعم الفني')">🛠️ الدعم الفني</button>
+                <div class="message bot">
+                    <div class="message-avatar">&#x1F916;</div>
+                    <div class="message-content">
+                        <div class="message-bubble">
+                            &#x64a;&#x645;&#x643;&#x646;&#x646;&#x64a; &#x645;&#x633;&#x627;&#x639;&#x62f;&#x62a;&#x643; &#x641;&#x64a;:
+                            <div class="quick-replies">
+                                <button class="quick-reply-btn" onclick="sendQuickReply('&#x627;&#x645;&#x62a;&#x62d;&#x627;&#x646;&#x627;&#x62a;')">&#x1F4DD; &#x627;&#x644;&#x627;&#x645;&#x62a;&#x62d;&#x627;&#x646;&#x627;&#x62a;</button>
+                                <button class="quick-reply-btn" onclick="sendQuickReply('&#x627;&#x644;&#x645;&#x648;&#x627;&#x62f; &#x627;&#x644;&#x62f;&#x631;&#x627;&#x633;&#x64a;&#x629;')">&#x1F4DA; &#x627;&#x644;&#x645;&#x648;&#x627;&#x62f;</button>
+                                <button class="quick-reply-btn" onclick="sendQuickReply('&#x646;&#x635;&#x627;&#x626;&#x62d; &#x627;&#x644;&#x62f;&#x631;&#x627;&#x633;&#x629;')">&#x1F4A1; &#x646;&#x635;&#x627;&#x626;&#x62d;</button>
+                                <button class="quick-reply-btn" onclick="sendQuickReply('&#x627;&#x644;&#x62f;&#x639;&#x645; &#x627;&#x644;&#x641;&#x646;&#x64a;')">&#x1F6E0;&#xFE0F; &#x62f;&#x639;&#x645; &#x641;&#x646;&#x64a;</button>
+                            </div>
                         </div>
+                        <div class="message-time">10:30 &#x635;</div>
                     </div>
-                    <div class="message-time">10:30 ص</div>
                 </div>
             </div>
-        </div>
 
-        <!-- Input Area -->
-        <div class="chat-input-container">
-            <button class="emoji-btn" onclick="insertEmoji()">😊</button>
-            <input 
-                type="text" 
-                class="chat-input" 
-                id="messageInput" 
-                placeholder="اكتب رسالتك هنا..."
-                onkeypress="handleKeyPress(event)"
-            >
-            <button class="send-btn" onclick="sendMessage()">➤</button>
-        </div>
+            <!-- Input -->
+            <div class="chat-footer">
+                <button class="emoji-btn" onclick="insertEmoji()" title="Emoji">&#x1F60A;</button>
+                <input type="text" class="chat-input" id="messageInput"
+                    placeholder="&#x627;&#x643;&#x62a;&#x628; &#x631;&#x633;&#x627;&#x644;&#x62a;&#x643; &#x647;&#x646;&#x627;..."
+                    onkeypress="handleKeyPress(event)">
+                <button class="send-btn" onclick="sendMessage()">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                    </svg>
+                </button>
+            </div>
+        </main>
     </div>
 
     <script src="app.js"></script>

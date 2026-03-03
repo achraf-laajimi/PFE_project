@@ -1,336 +1,142 @@
 """
-Session-based conversation memory with Mem0 long-term semantic layer.
+Redis-based sliding-window conversation memory.
 
-Two memory tiers:
-  1. Short-term (_store)  — last N turns for anaphora / context continuity.
-  2. Long-term  (Mem0)    — behavioral facts & user preferences stored as
-                            vector embeddings for semantic retrieval.
+Architecture: Sliding Window + Structured Session State (Redis)
 
-Mem0 is configured to use a local Qdrant instance by default.
-Set QDRANT_URL / QDRANT_API_KEY env vars for a remote Qdrant cluster.
+────────────────────────────────────────────────────────────
+
+1) Sliding Window (Short-Term Conversation)
+   - Redis List per session
+   - LPUSH + LTRIM to maintain fixed window size
+   - Stores raw turns (query/response/entities/intent/tools_used)
+
+2) Structured Session State (Deterministic Runtime Context)
+   - Redis Hash per session
+   - Stores active_student, active_subject, last_subject, topic, last_intent
+   - Used for deterministic context resolution (no LLM guessing)
+
+3) TTL
+   - Entire session expires automatically after inactivity
+   - No background cleanup needed
+
+No disk persistence.
+Redis is the single source of truth for session memory.
 """
 
-import os
-import re
-import asyncio
-from collections import defaultdict
-from pathlib import Path
+import json
+import time
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-import numpy as np
-from dotenv import load_dotenv
-from mem0 import Memory
-from openai import AsyncOpenAI
+import redis.asyncio as redis
 
 from agent.utils.logger import get_logger
 
-# Load .env (same file agent/ uses for OPENAI_API_KEY)
-_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
-load_dotenv(_ENV_PATH)
-
 logger = get_logger(__name__)
 
-# Max turns kept per session (oldest dropped first)
-_MAX_HISTORY = 10
-
-# ── Mem0 configuration ───────────────────────────────────────
-# Uses OpenAI embeddings (text-embedding-3-small) + Qdrant for storage.
-# Falls back to in-memory Qdrant if no QDRANT_URL is set.
-
-def _build_mem0_config() -> dict:
-    """Build Mem0 config dict from environment variables."""
-    config = {
-        "llm": {
-            "provider": "openai",
-            "config": {
-                "model": "gpt-4o-mini",
-                "temperature": 0.1,
-                "max_tokens": 1500,
-            },
-        },
-        "embedder": {
-            "provider": "openai",
-            "config": {
-                "model": "text-embedding-3-small",
-            },
-        },
-        "vector_store": {
-            "provider": "qdrant",
-            "config": {
-                "collection_name": "classquiz_memories",
-                "embedding_model_dims": 1536,
-            },
-        },
-        "version": "v1.1",
-    }
-
-    # Remote Qdrant cluster — set these env vars in production
-    qdrant_url = os.getenv("QDRANT_URL")
-    qdrant_api_key = os.getenv("QDRANT_API_KEY")
-
-    if qdrant_url:
-        config["vector_store"]["config"]["url"] = qdrant_url
-        if qdrant_api_key:
-            config["vector_store"]["config"]["api_key"] = qdrant_api_key
-        logger.info(f"Mem0: using remote Qdrant at {qdrant_url}")
-    else:
-        # Local Qdrant — store on disk next to the agent package
-        local_path = str(Path(__file__).resolve().parent.parent / "qdrant_data")
-        config["vector_store"]["config"]["path"] = local_path
-        logger.info(f"Mem0: using local Qdrant at {local_path}")
-
-    return config
-
-
-# ── Sanitization Patterns: Replace noisy data with placeholders ──────────
-# Instead of rejecting text with numbers, we sanitize it by replacing
-# raw statistics with semantic placeholders like [score] and [data].
-
-# Pattern 1: Raw JSON field names from tool outputs (to be stripped)
-_RAW_FIELD_PATTERN = re.compile(
-    r"\b("
-    r"stars_earned|stars_total|completion_percentage|exercises_total|"
-    r"exercises_done|focus_score|excellence_rate|average_stars|"
-    r"completion_rate|average_mistake|nb_mistakes|time_seconds|"
-    r"activity_feed|progress_list|kpis|usage_summary|score|percentage|"
-    r"total_exercises|done_exercises|remaining_exercises|"
-    r"avg_time|max_score|min_score"
-    r")\s*[:=]\s*\d+",
-    re.IGNORECASE,
-)
-
-# Pattern 2: Percentage symbols (e.g., "22%" → "[score]")
-_PERCENTAGE_PATTERN = re.compile(r"\d+\s*%")
-
-# Pattern 3: Numeric comparisons (e.g., "4/10", "85 out of 100" → "[data]")
-_NUMERIC_COMPARISON_PATTERN = re.compile(
-    r"\d+\s*(?:out of|of|/|sur|من)\s*\d+",
-    re.IGNORECASE
-)
-
-# Pattern 4: Standalone large numbers (e.g., "284 exercises" → "[count] exercises")
-_STANDALONE_NUMBER_PATTERN = re.compile(r"\b\d{3,}\b")
-
-
-def _sanitize_text(text: str) -> str:
-    """
-    Sanitize text by replacing raw statistics with semantic placeholders.
-    
-    Transformations:
-    - "22%" → "[score]"
-    - "4/10 exercises" → "[data] exercises"
-    - "stars_earned: 450" → "" (stripped)
-    - "284 exercises" → "[count] exercises"
-    
-    Examples:
-    Input:  "Chayma got 20% in Math and is struggling with logic"
-    Output: "Chayma got [score] in Math and is struggling with logic"
-    
-    Input:  "Ahmed completed 4/10 exercises, focus_score: 85"
-    Output: "Ahmed completed [data] exercises"
-    """
-    if not text:
-        return text
-    
-    sanitized = text
-    
-    # Step 1: Strip raw JSON field patterns (e.g., "stars_earned: 450")
-    sanitized = _RAW_FIELD_PATTERN.sub("", sanitized)
-    
-    # Step 2: Replace percentages with [score]
-    sanitized = _PERCENTAGE_PATTERN.sub("[score]", sanitized)
-    
-    # Step 3: Replace numeric comparisons with [data]
-    sanitized = _NUMERIC_COMPARISON_PATTERN.sub("[data]", sanitized)
-    
-    # Step 4: Replace large standalone numbers with [count]
-    # (only numbers >= 100, to preserve ages, dates, small counts)
-    sanitized = _STANDALONE_NUMBER_PATTERN.sub("[count]", sanitized)
-    
-    # Step 5: Clean up extra whitespace and commas
-    sanitized = re.sub(r"\s+", " ", sanitized)
-    sanitized = re.sub(r",\s*,", ",", sanitized)
-    sanitized = re.sub(r"\(\s*\)", "", sanitized)  # Remove empty parens
-    
-    return sanitized.strip()
-
-
-# ── Semantic Memory Router ───────────────────────────────────
-# Vector-based behavioral detection that works for Arabizi, French, Arabic, English
-
-class SemanticMemoryRouter:
-    """
-    Semantic router that uses vector embeddings to detect behavioral content.
-    
-    This replaces brittle keyword matching with semantic similarity scoring,
-    making it work seamlessly across languages and dialects (including Tunisian Arabizi).
-    
-    Key benefits:
-    - Works for "yew7al", "يوحل", "struggle" equally well (semantic understanding)
-    - No keyword list maintenance required
-    - Fast (~100ms per check with caching)
-    - Cost-effective (embeddings are 100x cheaper than LLM completions)
-    """
-    
-    def __init__(self, api_key: str):
-        self.client = AsyncOpenAI(api_key=api_key)
-        
-        # These represent the "pure concepts" of what we want to save
-        # They are language-agnostic at the vector level
-        self.reference_concepts = [
-            "Student struggles with a specific academic topic or concept",
-            "Parent expresses a preference for language, style, or communication format",
-            "Behavioral observation about student's focus, motivation, or study habits",
-            "Academic strength or weakness mentioned about the student",
-            "Parental feedback or concern about educational progress",
-            "Request for specific teaching approach or intervention",
-            "Student's preferred learning time or environment",
-        ]
-        
-        # Concept vectors loaded lazily on first call — cannot await in __init__
-        self.concept_vectors = None
-    
-    async def _ensure_initialized(self) -> None:
-        """Lazily initialize concept vectors on first use (async-safe)."""
-        if self.concept_vectors is not None:
-            return
-        try:
-            self.concept_vectors = await self._get_embeddings(self.reference_concepts)
-            logger.info(f"[SemanticRouter] Initialized with {len(self.concept_vectors)} reference concepts")
-        except Exception as e:
-            logger.error(f"[SemanticRouter] Failed to initialize concept vectors: {e}")
-            self.concept_vectors = None
-    
-    async def _get_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """Get embeddings for a list of texts (async, non-blocking)."""
-        response = await self.client.embeddings.create(
-            input=texts,
-            model="text-embedding-3-small"
-        )
-        return [record.embedding for record in response.data]
-    
-    async def get_behavioral_score(self, text: str) -> float:
-        """
-        Calculate how 'behavioral' a text is using semantic similarity.
-        
-        Returns a score between 0.0 and 1.0, where:
-        - 0.0-0.5: Not behavioral (pure data, greetings, etc.)
-        - 0.5-0.7: Potentially behavioral (borderline)
-        - 0.7+: Definitely behavioral (should be stored)
-        
-        This works for ANY language because vectors capture semantic meaning:
-        - "yew7al" (Arabizi) → high similarity to "struggle"
-        - "عندو مشكل" (Arabic) → high similarity to "has a problem"
-        - "il a des difficultés" (French) → high similarity to "has difficulties"
-        
-        Args:
-            text: The text to score
-            
-        Returns:
-            float: Behavioral score (0.0-1.0)
-        """
-        if not text or len(text.strip()) < 10:
-            return 0.0
-
-        await self._ensure_initialized()
-
-        if self.concept_vectors is None:
-            logger.warning("[SemanticRouter] Concept vectors not initialized, falling back to heuristic")
-            return 0.5  # Neutral score if router failed to initialize
-        
-        try:
-            # Get embedding for the input text
-            text_vector = (await self._get_embeddings([text]))[0]
-            
-            # Calculate cosine similarity against all reference concepts
-            similarities = []
-            for concept_vector in self.concept_vectors:
-                similarity = np.dot(text_vector, concept_vector) / (
-                    np.linalg.norm(text_vector) * np.linalg.norm(concept_vector)
-                )
-                similarities.append(similarity)
-            
-            # Return the highest similarity score
-            max_score = max(similarities)
-            logger.debug(f"[SemanticRouter] Behavioral score: {max_score:.3f} for text: '{text[:50]}...'")
-            return max_score
-            
-        except Exception as e:
-            logger.error(f"[SemanticRouter] Error calculating behavioral score: {e}")
-            return 0.5  # Neutral score on error
+# ── Constants ──────────────────────────────────────────────────────────────
+_WINDOW_SIZE = 7
+_SESSION_TTL_SECONDS = 60 * 60 * 24 * 3
 
 
 class MemoryManager:
     """
-    Two-tier memory manager keyed by session_id.
+    Redis-backed short-term session memory with async support.
 
-    Tier 1 — Short-term (_store):
-        Last N turns (query + response + entities) for anaphora resolution
-        and conversational continuity.
-
-    Tier 2 — Long-term (Mem0):
-        Semantic vector memory storing behavioral facts & user preferences.
-        Uses semantic routing for robust behavioral detection across languages.
-        Raw statistics are SANITIZED (replaced with placeholders) before storage.
-        
-    Key features:
-    - Semantic routing (works for Arabizi, Arabic, French, English)
-    - Asynchronous memory storage (zero user latency)
-    - Sanitization instead of hard rejection
-    - Direct student_id as user_id for cross-session persistence
+    Public API
+    ──────────
+    add_turn(session_id, ...)          → Store conversation turn
+    get_history(session_id)            → Get sliding window (oldest→newest)
+    update_state(session_id, data)     → Update session state
+    get_state(session_id)              → Get session state dict
+    get_student_id(session_id)         → Get active student ID
+    format_for_prompt(session_id)      → Format conversation for LLM
+    clear(session_id)                  → Clear session memory
+    close()                            → Close Redis connection
     """
 
-    def __init__(self, max_history: int = _MAX_HISTORY):
-        self._max = max_history
-        # session_id → list of Turn dicts
-        self._store: Dict[str, List[Dict]] = defaultdict(list)
-        # session_id → arbitrary context (student_id, prefs, …)
-        self._context: Dict[str, Dict] = defaultdict(dict)
+    def __init__(
+        self,
+        redis_url: str = "redis://localhost:6379/0",
+        window_size: int = _WINDOW_SIZE,
+    ):
+        self._window_size = window_size
+        self._redis_url = redis_url
+        self.redis: Optional[redis.Redis] = None
 
-        # ── Mem0 long-term memory ────────────────────────────
-        try:
-            mem0_config = _build_mem0_config()
-            self.mem0 = Memory.from_config(mem0_config)
-            logger.info("Mem0 long-term memory initialized successfully")
-        except Exception as e:
-            logger.error(f"Mem0 initialization failed (falling back to short-term only): {e}")
-            self.mem0 = None
-        
-        # ── Background task set (strong references prevent GC) ─────
-        self._background_tasks: set = set()
+    # ────────────────────────────────────────────────────────────────────────
+    # Connection Management
+    # ────────────────────────────────────────────────────────────────────────
 
-        # ── Semantic Router ──────────────────────────────────
-        # Initialize semantic router for behavioral detection
-        api_key = os.getenv("OPENAI_API_KEY")
-        if api_key:
-            try:
-                self.semantic_router = SemanticMemoryRouter(api_key)
-                logger.info("SemanticMemoryRouter initialized successfully")
-            except Exception as e:
-                logger.error(f"SemanticMemoryRouter initialization failed: {e}")
-                self.semantic_router = None
-        else:
-            logger.warning("OPENAI_API_KEY not found, semantic routing disabled")
-            self.semantic_router = None
+    async def connect(self) -> None:
+        """Establish async Redis connection."""
+        if self.redis is None:
+            self.redis = await redis.from_url(
+                self._redis_url,
+                encoding="utf-8",
+                decode_responses=True
+            )
+            await self.redis.ping()
+            logger.info(f"[Memory] Connected to Redis at {self._redis_url}")
 
-    # ── Public API ─────────────────────────────────────────────
+    async def close(self) -> None:
+        """Close Redis connection gracefully."""
+        if self.redis:
+            await self.redis.close()
+            logger.info("[Memory] Redis connection closed")
 
-    def add_turn(
+    # ────────────────────────────────────────────────────────────────────────
+    # Internal Helpers
+    # ────────────────────────────────────────────────────────────────────────
+
+    def _history_key(self, session_id: str) -> str:
+        return f"session:{session_id}:history"
+
+    def _state_key(self, session_id: str) -> str:
+        return f"session:{session_id}:state"
+
+    def _meta_key(self, session_id: str) -> str:
+        return f"session:{session_id}:meta"
+
+    def _student_sessions_key(self, student_id: str) -> str:
+        """Sorted set of session_ids for a student (score = unix timestamp)."""
+        return f"student:{student_id}:sessions"
+
+    async def _touch_ttl(self, session_id: str) -> None:
+        """
+        Reset TTL on history, state, and meta.
+        Keeps session alive while active.
+        """
+        if not self.redis:
+            return
+        await self.redis.expire(self._history_key(session_id), _SESSION_TTL_SECONDS)
+        await self.redis.expire(self._state_key(session_id), _SESSION_TTL_SECONDS)
+        await self.redis.expire(self._meta_key(session_id), _SESSION_TTL_SECONDS)
+
+    # ────────────────────────────────────────────────────────────────────────
+    # Public API
+    # ────────────────────────────────────────────────────────────────────────
+
+    async def add_turn(
         self,
         session_id: str,
         query: str,
         response: str,
-        entities: List[str] = None,
-        intent: str = None,
-        tools_used: List[str] = None,
+        entities: Optional[List[str]] = None,
+        intent: Optional[str] = None,
+        tools_used: Optional[List[str]] = None,
     ) -> None:
         """
-        Record a completed turn in short-term memory AND push
-        behavioral observations to Mem0 long-term memory asynchronously.
+        Append a completed turn to Redis sliding window.
+        Uses LPUSH + LTRIM for O(1) window maintenance.
         
-        The memory storage happens in the background, so the user
-        gets their response immediately without waiting for Mem0.
+        Note: LPUSH stores newest first, so get_history() reverses
+        the list to show oldest→newest (chronological order).
         """
+        if not self.redis:
+            logger.warning("[Memory] Redis not connected, skipping add_turn")
+            return
+
         turn = {
             "query": query,
             "response": response,
@@ -338,310 +144,305 @@ class MemoryManager:
             "intent": intent,
             "tools_used": tools_used or [],
         }
-        history = self._store[session_id]
-        history.append(turn)
-        # Evict oldest when over limit
-        if len(history) > self._max:
-            self._store[session_id] = history[-self._max :]
-        logger.debug(f"[Memory] {session_id}: {len(self._store[session_id])} turns stored")
 
-        # ── Mem0: store behavioral context (asynchronously) ──
-        # Wrapped in error-resilient coroutine; strong reference prevents GC.
-        async def _safe_mem0_task() -> None:
-            try:
-                await self._store_in_mem0_async(
-                    session_id, query, response, intent, tools_used or []
-                )
-            except Exception as exc:
-                logger.error(
-                    f"[Mem0] Background task failed unexpectedly: {exc}",
-                    exc_info=True,
-                )
+        key = self._history_key(session_id)
 
-        task = asyncio.create_task(_safe_mem0_task())
-        self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
+        # Push newest at head (LPUSH = prepend)
+        await self.redis.lpush(key, json.dumps(turn, ensure_ascii=False))
 
-    def get_history(self, session_id: str) -> List[Dict]:
-        """Return the full turn history for a session."""
-        return list(self._store.get(session_id, []))
+        # Trim to window size (keep indices 0 to window_size-1)
+        await self.redis.ltrim(key, 0, self._window_size - 1)
 
-    def get_recent_entities(self, session_id: str, n: int = 3) -> List[str]:
+        await self._touch_ttl(session_id)
+
+        # Set the session title lazily from the first query
+        meta_key = self._meta_key(session_id)
+        current_title = await self.redis.hget(meta_key, "title")
+        if current_title == "":
+            await self.redis.hset(meta_key, "title", query[:60])
+
+        logger.debug(
+            f"[Memory] {session_id}: added turn (max {self._window_size})"
+        )
+
+    # ────────────────────────────────────────────────────────────────────────
+
+    async def get_history(self, session_id: str) -> List[Dict]:
         """
-        Collect unique entities from the last *n* turns (most-recent-first).
-
-        Useful for resolving pronouns: if the user says "give me his exercises"
-        and the last turn mentioned "Ahmed", the planner can use "Ahmed".
-        """
-        history = self._store.get(session_id, [])
-        seen = []
-        for turn in reversed(history[-n:]):
-            for entity in turn.get("entities", []):
-                if entity not in seen:
-                    seen.append(entity)
-        return seen
-
-    def get_last_student_id(self, session_id: str) -> Optional[str]:
-        """
-        Return the student_id for this session.
-
-        Checks context first (set explicitly via update_context),
-        then falls back to scanning turn entities.
-        """
-        # Fast path: explicit context
-        ctx_id = self._context.get(session_id, {}).get("student_id")
-        if ctx_id:
-            return str(ctx_id)
-
-        # Fallback: walk backwards through history
-        for turn in reversed(self._store.get(session_id, [])):
-            for entity in turn.get("entities", []):
-                if entity.isdigit():
-                    return entity
-        return None
-
-    # ── Session context ───────────────────────────────────────
-
-    def update_context(self, session_id: str, data: Dict) -> None:
-        """
-        Merge *data* into the session's context dict.
+        Return sliding window in chronological order (oldest → newest).
         
-        Critical: Call this BEFORE add_turn() so that student_id
-        is available for Mem0 user_id resolution.
-        """
-        self._context[session_id].update(data)
-        logger.debug(f"[Memory] Context updated for {session_id}: {list(data.keys())}")
-
-    def get_context(self, session_id: str) -> Dict:
-        """Return the full context dict for a session."""
-        return dict(self._context.get(session_id, {}))
-
-    def get_student_id(self, session_id: str) -> Optional[str]:
-        """Shortcut: return student_id from context, or None."""
-        return self._context.get(session_id, {}).get("student_id")
-
-    # ── Mem0 long-term memory ─────────────────────────────────
-
-    async def _store_in_mem0_async(
-        self,
-        session_id: str,
-        query: str,
-        response: str,
-        intent: Optional[str],
-        tools_used: List[str],
-    ) -> None:
-        """
-        Asynchronously push observations to Mem0 with semantic routing.
+        Redis stores newest first (LPUSH), so we reverse the list
+        to match natural conversation flow.
         
-        This runs in the background after the user gets their response,
-        ensuring zero latency impact on the conversation.
-        
-        Process:
-        1. Use semantic router to score query and response (fast, ~100ms)
-        2. If score > 0.72, sanitize and store in Mem0 (expensive, ~2s)
-        3. Only spend expensive LLM tokens when we're confident it's behavioral
-        
-        Threshold explanation:
-        - 0.72+ = High confidence behavioral content (store it)
-        - 0.5-0.72 = Borderline (skip to avoid noise)
-        - <0.5 = Not behavioral (skip)
+        Returns:
+            List[Dict]: Turns in chronological order
         """
-        if self.mem0 is None or self.semantic_router is None:
+        if not self.redis:
+            return []
+
+        key = self._history_key(session_id)
+        raw_turns = await self.redis.lrange(key, 0, -1)
+
+        await self._touch_ttl(session_id)
+
+        # Redis list is newest first (LPUSH), reverse for chronological order
+        turns = [json.loads(t) for t in raw_turns]
+        turns.reverse()  # Now oldest → newest
+        
+        return turns
+
+    # ────────────────────────────────────────────────────────────────────────
+
+    async def update_state(self, session_id: str, data: Dict) -> None:
+        """
+        Merge structured runtime state into Redis Hash.
+        
+        Handles multi-subject transitions automatically:
+        - When active_subject changes, saves previous to last_subject
+        
+        Example:
+            await memory.update_state("123", {
+                "active_student": "42",
+                "active_subject": "maths",
+                "topic": "performance_review"
+            })
+            
+            # Later, when switching subjects:
+            await memory.update_state("123", {
+                "active_subject": "physics"  # maths → last_subject
+            })
+        """
+        if not self.redis:
+            logger.warning("[Memory] Redis not connected, skipping update_state")
             return
 
-        user_id = self._resolve_user_id(session_id)
-        student_id = self.get_student_id(session_id)
+        key = self._state_key(session_id)
+
+        # Handle multi-subject transitions
+        if "active_subject" in data:
+            current_state = await self.redis.hgetall(key)
+            current_subject = current_state.get("active_subject")
+            new_subject = data["active_subject"]
+            
+            # If subject is changing, save old one as last_subject
+            if current_subject and current_subject != new_subject:
+                data["last_subject"] = current_subject
+                logger.debug(
+                    f"[Memory] {session_id}: subject transition "
+                    f"{current_subject} → {new_subject}"
+                )
+
+        if data:
+            await self.redis.hset(key, mapping=data)
+
+        # Register session in the student's sorted set (first time active_student is set)
+        if "active_student" in data:
+            student_id = data["active_student"]
+            registry_key = self._student_sessions_key(student_id)
+            await self.redis.zadd(registry_key, {session_id: int(time.time())}, nx=True)
+            await self.redis.expire(registry_key, _SESSION_TTL_SECONDS * 30)  # keep registry 30× longer
+            # Init meta hash only if it doesn't exist yet
+            meta_key = self._meta_key(session_id)
+            if not await self.redis.exists(meta_key):
+                await self.redis.hset(meta_key, mapping={
+                    "student_id": student_id,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "title": "",
+                })
+                await self.redis.expire(meta_key, _SESSION_TTL_SECONDS)
+
+        await self._touch_ttl(session_id)
+
+        logger.debug(
+            f"[Memory] {session_id}: updated state keys {list(data.keys())}"
+        )
+
+    # ────────────────────────────────────────────────────────────────────────
+
+    async def get_state(self, session_id: str) -> Dict:
+        """
+        Retrieve structured runtime state.
         
-        # Always include student_id in metadata for context
-        metadata = {"session_id": session_id}
-        if student_id:
-            metadata["student_id"] = student_id
-
-        # ── Store user query (if behavioral) ─────────────────
-        if query:
-            try:
-                query_score = await self.semantic_router.get_behavioral_score(query)
-                
-                if query_score > 0.72:  # High confidence threshold
-                    # Sanitize before storage
-                    sanitized_query = _sanitize_text(query)
-                    
-                    if sanitized_query and len(sanitized_query) > 10:
-                        self.mem0.add(
-                            sanitized_query,
-                            user_id=user_id,
-                            metadata=metadata,
-                        )
-                        logger.debug(
-                            f"[Mem0] Stored query (score: {query_score:.3f}): '{sanitized_query[:50]}...'"
-                        )
-                    else:
-                        logger.debug(f"[Mem0] Query too short after sanitization, skipping")
-                else:
-                    logger.debug(
-                        f"[Mem0] Query score too low ({query_score:.3f}), skipping"
-                    )
-            except Exception as e:
-                logger.warning(f"[Mem0] Failed to store query: {e}")
-
-        # ── Store assistant response (if behavioral) ─────────
-        if response:
-            try:
-                response_score = await self.semantic_router.get_behavioral_score(response)
-                
-                if response_score > 0.72:  # High confidence threshold
-                    # Sanitize before storage
-                    sanitized_response = _sanitize_text(response)
-                    
-                    if sanitized_response and len(sanitized_response) > 20:
-                        self.mem0.add(
-                            sanitized_response,
-                            user_id=user_id,
-                            metadata=metadata,
-                        )
-                        logger.debug(
-                            f"[Mem0] Stored response (score: {response_score:.3f}): '{sanitized_response[:50]}...'"
-                        )
-                        
-                        if sanitized_response != response:
-                            logger.debug(
-                                f"[Mem0] Sanitized response: '{response[:80]}...' → '{sanitized_response[:80]}...'"
-                            )
-                    else:
-                        logger.debug(f"[Mem0] Response too short after sanitization, skipping")
-                else:
-                    logger.debug(
-                        f"[Mem0] Response score too low ({response_score:.3f}), skipping"
-                    )
-            except Exception as e:
-                logger.warning(f"[Mem0] Failed to store response: {e}")
-
-    def get_semantic_memories(self, session_id: str, query: str = "") -> str:
-        """
-        Retrieve long-term behavioral context from Mem0.
-
-        Returns a formatted string of relevant memories, e.g.:
-          "- Parent prefers Darija responses
-           - Student usually studies at night
-           - Parent asked for concise reports"
-
-        If Mem0 is unavailable returns empty string.
-        """
-        if self.mem0 is None:
-            return ""
-
-        user_id = self._resolve_user_id(session_id)
-
-        try:
-            # Search memories relevant to the current query
-            if query:
-                results = self.mem0.search(query, user_id=user_id, limit=5)
-            else:
-                results = self.mem0.get_all(user_id=user_id)
-
-            if not results:
-                return ""
-
-            # results can be a dict with "results" key or a list directly
-            memories = results.get("results", results) if isinstance(results, dict) else results
-
-            if not memories:
-                return ""
-
-            lines = []
-            for mem in memories:
-                text = mem.get("memory", "") if isinstance(mem, dict) else str(mem)
-                if text.strip():
-                    lines.append(f"- {text.strip()}")
-
-            return "\n".join(lines) if lines else ""
-
-        except Exception as e:
-            logger.warning(f"[Mem0] Failed to retrieve memories: {e}")
-            return ""
-
-    # ── Prompt formatting ─────────────────────────────────────
-
-    def format_for_prompt(self, session_id: str, max_turns: int = 3, query: str = "") -> str:
-        """
-        Format recent history + long-term context for LLM prompts.
-
         Returns:
-            [Long-Term Behavioral Context]
-            - Parent prefers short summaries
-            - Student studies at night
+            Dict with keys like:
+            - active_student: Current student ID
+            - active_subject: Current subject being discussed
+            - last_subject: Previous subject (for transitions)
+            - topic: Current conversation topic
+            - last_intent: Previous intent classification
+        """
+        if not self.redis:
+            return {}
 
-            [Short-Term Conversation History]
-            User: كيفاش أحمد في الرياضيات؟
-            Assistant: أحمد عنده 85% في الهندسة...
+        key = self._state_key(session_id)
+        state = await self.redis.hgetall(key)
+
+        await self._touch_ttl(session_id)
+
+        return state or {}
+
+    # ────────────────────────────────────────────────────────────────────────
+
+    async def format_for_prompt(
+        self,
+        session_id: str,
+        max_turns: int = 3,
+        include_state: bool = True
+    ) -> str:
+        """
+        Format conversation history and state for LLM context injection.
+        
+        Returns a formatted string like:
+        
+        [Session State]
+        Student: 42 (Ahmed)
+        Subject: Math → Physics (switched)
+        Topic: performance_review
+        
+        [Conversation History]
+        User: كيفاش أحمد في الرياضيات؟
+        Assistant: أحمد عنده تقدم ممتاز...
+        User: وشنوة في الفيزياء؟
+        Assistant: الفيزياء فيها...
+        
+        Args:
+            session_id: Session identifier
+            max_turns: Max conversation turns to include
+            include_state: Whether to include session state section
+            
+        Returns:
+            Formatted string for LLM prompt injection
         """
         sections = []
 
-        # ── Long-term: Mem0 semantic memories ────────────────
-        semantic = self.get_semantic_memories(session_id, query=query)
-        if semantic:
-            sections.append(f"[Long-Term Behavioral Context]\n{semantic}")
+        # ── Session State ────────────────────────────────────
+        if include_state:
+            state = await self.get_state(session_id)
+            if state:
+                state_lines = ["[Session State]"]
+                
+                student_id = state.get("active_student")
+                if student_id:
+                    state_lines.append(f"Student: {student_id}")
+                
+                subject = state.get("active_subject")
+                last_subject = state.get("last_subject")
+                if subject:
+                    if last_subject and last_subject != subject:
+                        state_lines.append(
+                            f"Subject: {last_subject} → {subject} (switched)"
+                        )
+                    else:
+                        state_lines.append(f"Subject: {subject}")
+                
+                topic = state.get("topic")
+                if topic:
+                    state_lines.append(f"Topic: {topic}")
+                
+                if len(state_lines) > 1:  # Has content beyond header
+                    sections.append("\n".join(state_lines))
 
-        # ── Short-term: recent turns ─────────────────────────
-        history = self._store.get(session_id, [])
-        if history:
-            lines = []
-            for turn in history[-max_turns:]:
+        # ── Conversation History ─────────────────────────────
+        history = await self.get_history(session_id)
+        
+        if not history:
+            sections.append(
+                "[Conversation History]\n(no previous conversation)"
+            )
+        else:
+            lines = ["[Conversation History]"]
+            
+            # Get last N turns (already in chronological order)
+            recent_turns = history[-max_turns:]
+            
+            for turn in recent_turns:
                 lines.append(f"User: {turn['query']}")
                 lines.append(f"Assistant: {turn['response']}")
-            sections.append(f"[Short-Term Conversation History]\n" + "\n".join(lines))
-        else:
-            sections.append("[Short-Term Conversation History]\n(no previous conversation)")
+            
+            sections.append("\n".join(lines))
 
         return "\n\n".join(sections)
 
-    # ── Lifecycle ─────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────
 
-    async def shutdown(self) -> None:
+    async def get_recent_entities(
+        self,
+        session_id: str,
+        n: int = 3
+    ) -> List[str]:
         """
-        Gracefully wait for all in-flight background memory tasks.
-
-        Call this during server shutdown (FastAPI lifespan cleanup) so that
-        no pending Mem0 writes are lost on restart.
-        """
-        if self._background_tasks:
-            logger.info(
-                f"[Memory] Waiting for {len(self._background_tasks)} "
-                "background memory task(s) before shutdown..."
-            )
-            await asyncio.gather(*self._background_tasks, return_exceptions=True)
-            logger.info("[Memory] All background memory tasks completed.")
-
-    # ── Cleanup ───────────────────────────────────────────────
-
-    def clear(self, session_id: str) -> None:
-        """Wipe short-term history for a session (Mem0 persists)."""
-        self._store.pop(session_id, None)
-        self._context.pop(session_id, None)
-        logger.info(f"[Memory] Cleared session {session_id}")
-
-    # ── Helpers ───────────────────────────────────────────────
-
-    def _resolve_user_id(self, session_id: str) -> str:
-        """
-        Derive a stable user_id for Mem0 indexing.
+        Get unique entities from last N turns (for anaphora resolution).
         
-        Priority:
-        1. student_id from context → student_id directly (no prefix)
-           (ensures memory persists across sessions for same student)
-        2. Fallback → "session_{session_id}"
+        Example:
+            User: "How is Ahmed doing?"  → entities: ["Ahmed"]
+            User: "Show me his exercises" → resolve "his" = Ahmed
         
-        Critical: This must be called AFTER update_context() has been
-        called with student_id, otherwise it will fall back to session_id
-        and memories won't persist across sessions.
+        Args:
+            session_id: Session identifier
+            n: Number of recent turns to check
+            
+        Returns:
+            List of unique entities (most recent first)
         """
-        student_id = self.get_student_id(session_id)
+        history = await self.get_history(session_id)
+        
+        seen = []
+        for turn in reversed(history[-n:]):  # Check newest first
+            for entity in turn.get("entities", []):
+                if entity not in seen:
+                    seen.append(entity)
+        
+        return seen
+
+    # ────────────────────────────────────────────────────────────────────────
+
+    async def list_student_sessions(self, student_id: str) -> List[Dict]:
+        """
+        Return metadata for every session belonging to *student_id*,
+        ordered newest first.
+
+        Returns:
+            List of dicts: {session_id, title, created_at, turn_count}
+        """
+        if not self.redis:
+            return []
+        registry_key = self._student_sessions_key(student_id)
+        # zrevrange → newest scores first
+        session_ids = await self.redis.zrevrange(registry_key, 0, -1)
+        sessions = []
+        for sid in session_ids:
+            meta = await self.redis.hgetall(self._meta_key(sid))
+            if not meta:
+                continue
+            turn_count = await self.redis.llen(self._history_key(sid))
+            sessions.append({
+                "session_id": sid,
+                "title": meta.get("title") or "\u0645\u062d\u0627\u062f\u062b\u0629 \u062c\u062f\u064a\u062f\u0629",
+                "created_at": meta.get("created_at", ""),
+                "turn_count": turn_count,
+            })
+        return sessions
+
+    # ────────────────────────────────────────────────────────────────────────
+
+    async def clear(self, session_id: str) -> None:
+        """
+        Completely remove session memory (history + state + meta + registry).
+        """
+        if not self.redis:
+            return
+
+        # Fetch student_id before deleting state
+        state = await self.get_state(session_id)
+        student_id = state.get("active_student")
+
+        await self.redis.delete(
+            self._history_key(session_id),
+            self._state_key(session_id),
+            self._meta_key(session_id),
+        )
+
         if student_id:
-            # Return student_id directly (no "parent_" prefix)
-            logger.debug(f"[Mem0] Resolved user_id: {student_id} (from student_id)")
-            return student_id
-        
-        # Fallback to session-based ID
-        user_id = f"session_{session_id}"
-        logger.debug(f"[Mem0] Resolved user_id: {user_id} (fallback to session)")
-        return user_id
+            await self.redis.zrem(self._student_sessions_key(student_id), session_id)
+
+        logger.info(f"[Memory] Cleared session {session_id}")

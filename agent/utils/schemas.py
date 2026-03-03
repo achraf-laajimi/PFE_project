@@ -6,11 +6,12 @@ from typing import List, Optional, Literal, Dict, Any
 
 class IntentClassification(BaseModel):
     """Intent detection result"""
-    intent: Literal["chitchat", "tool_required"]
+    intent: Literal["chitchat", "platform_info", "tool_required"]
     reasoning: str
     subject: Optional[str] = None
     entities: List[str] = Field(default_factory=list)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    revised_query: Optional[str] = None  # Expanded query for anaphora resolution / planner input
 
 
 class TaskNode(BaseModel):
