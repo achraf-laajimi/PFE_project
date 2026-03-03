@@ -73,7 +73,7 @@ def synthesize_response(
     prompt = prompt_template.format(
         query=query,
         tool_results=results_text,
-        history=history or "(no previous conversation)",
+        conversation_history=history or "(no previous conversation)",
     )
     logger.debug(f"Synthesis prompt length: {len(prompt)} chars")
     
@@ -81,9 +81,13 @@ def synthesize_response(
         response = llm.generate(
             prompt=prompt,
             temperature=0.45,
-            max_tokens=500,
-            timeout=35,
+            max_tokens=1200,
+            timeout=45,
         )
+
+        if not response:
+            logger.warning("Synthesis LLM returned empty content — using fallback")
+            return "عذراً، لم أتمكن من توليد رد. يرجى المحاولة مرة أخرى."
 
         # Guardrail A: Arabic-script query with Latin leakage → force Arabic rewrite.
         if _ARABIC_CHAR_RE.search(query or "") and _LATIN_CHAR_RE.search(response or ""):
@@ -97,8 +101,8 @@ def synthesize_response(
             response = llm.generate(
                 prompt=rewrite_prompt,
                 temperature=0.2,
-                max_tokens=500,
-                timeout=20,
+                max_tokens=1200,
+                timeout=45,
             )
 
         # Guardrail B: Arabizi query must return Arabic-script Darija (per prompt policy).
@@ -113,10 +117,10 @@ def synthesize_response(
             response = llm.generate(
                 prompt=rewrite_prompt,
                 temperature=0.2,
-                max_tokens=500,
-                timeout=20,
+                max_tokens=1200,
+                timeout=45,
             )
-        
+
         logger.info(f"Response synthesized: {len(response)} chars")
         return response.strip()
     
@@ -147,9 +151,13 @@ def generate_chitchat_response(query: str, llm: LLMService, history: str = "") -
         response = llm.generate(
             prompt=prompt,
             temperature=0.5,
-            max_tokens=200
+            max_tokens=800
         )
-        
+
+        if not response:
+            logger.warning("Chitchat LLM returned empty content — using fallback")
+            return "مرحباً! أنا مساعدك التعليمي. كيف يمكنني مساعدتك اليوم؟"
+
         logger.info(f"Chitchat response generated: {len(response)} chars")
         return response.strip()
     

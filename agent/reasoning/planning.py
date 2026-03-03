@@ -40,15 +40,29 @@ def create_dag_plan(
         tools_schema=json.dumps(tools_schema, indent=2, ensure_ascii=False),
         query=query,
         entities=json.dumps(entities, ensure_ascii=False),
-        student_id=student_id or "UNKNOWN",
+        # Shadow-ID: the LLM only ever sees the alias; the real ID is
+        # injected back into params after the LLM call (see below).
+        student_id="CURRENT_STUDENT",
         history=history or "(no previous conversation)",
         current_date=date.today().isoformat(),
     )
 
     try:
-        response = llm.generate(prompt=prompt, temperature=0.2)
+        response = llm.generate(prompt=prompt, temperature=0.2, max_tokens=2000)
         result_dict = llm.extract_json(response)
         plan = DAGPlan(**result_dict)
+
+        # ── Alias resolution ────────────────────────────────────────────
+        # Replace every "CURRENT_STUDENT" placeholder the LLM wrote into
+        # task params with the real student_id before DAG execution.
+        # The real ID is never passed to the LLM; it travels out-of-band.
+        if student_id and student_id != "CURRENT_STUDENT":
+            for task in plan.tasks:
+                task.params = {
+                    k: (student_id if v == "CURRENT_STUDENT" else v)
+                    for k, v in task.params.items()
+                }
+
         logger.info(f"DAG plan ready: {len(plan.tasks)} task(s)")
         return plan
     except Exception as e:

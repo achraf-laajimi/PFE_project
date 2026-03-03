@@ -28,7 +28,7 @@ class LLMService:
                 "Set it before starting the agent."
             )
         self.model = model
-        self.request_timeout = float(os.getenv("OPENAI_REQUEST_TIMEOUT", "45"))
+        self.request_timeout = float("30")
         self.client = OpenAI(api_key=api_key, timeout=self.request_timeout)
         logger.info(f"Initialized LLM service with model: {model}")
 
@@ -58,16 +58,18 @@ class LLMService:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
+        request_args = {
+            "model": self.model,
+            "messages": messages,
+            "max_completion_tokens": max_tokens,
+            "temperature": temperature,
+            "timeout": timeout or self.request_timeout,
+        }
+
         try:
             logger.debug(f"Sending request to OpenAI ({self.model})")
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                timeout=timeout or self.request_timeout,
-            )
-            generated_text = response.choices[0].message.content.strip()
+            response = self.client.chat.completions.create(**request_args)
+            generated_text = (response.choices[0].message.content or "").strip()
             logger.debug(f"LLM response length: {len(generated_text)} chars")
             return generated_text
 

@@ -6,7 +6,7 @@ from typing import List, Optional, Literal, Dict, Any
 
 class IntentClassification(BaseModel):
     """Intent detection result"""
-    intent: Literal["chitchat", "platform_info", "tool_required"]
+    intent: Literal["chitchat", "platform_info", "tool_required", "pii_request"]
     reasoning: str
     subject: Optional[str] = None
     entities: List[str] = Field(default_factory=list)

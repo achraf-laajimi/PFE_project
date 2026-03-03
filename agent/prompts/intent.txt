@@ -11,12 +11,20 @@ Greetings, thanks, goodbyes, small talk, or off-topic questions.
 **platform_info**
 Questions about ClassQuiz itself (what it is, how it works, subjects, pricing, features) WITHOUT requesting specific student data.
 
+**pii_request**
+Any request that explicitly asks for a student's personal identifier: numeric ID, account number, phone number, email address, or any other private credential.
+Examples: "abaathli el id", "what is the student ID", "baathli raqam", "give me the account number".
+
 **tool_required**
 Requests for specific student academic data: performance, progress, exercises, recommendations, or analysis.
 
 ═══════════════════════════════════════════
 CLASSIFICATION RULES
 ═══════════════════════════════════════════
+
+**Rule 0: PII / ID Requests (highest priority)**
+If the query explicitly asks for a student's ID, account number, phone, or any private credential:
+→ pii_request  (override ALL other rules)
 
 **Rule 1: Student Data Triggers**
 If the query asks about SPECIFIC academic information:
@@ -48,7 +56,7 @@ ENTITY EXTRACTION
 ═══════════════════════════════════════════
 
 Extract from the CURRENT query only:
-- Student names (Ahmed, Fatima, ولدي, ابنتي)
+- Student names (Ahmed, Fatima)
 - Subject names (رياضيات, عربية, math, Arabic)
 
 Do NOT extract from conversation history.
@@ -61,7 +69,7 @@ Return ONLY valid JSON:
 
 ```json
 {
-  "intent": "chitchat|platform_info|tool_required",
+  "intent": "chitchat|platform_info|tool_required|pii_request",
   "reasoning": "Brief explanation of why this intent was chosen",
   "subject": null,
   "entities": [],

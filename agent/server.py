@@ -10,8 +10,12 @@ from datetime import datetime
 
 from agent.agent import ClassQuizAgent
 from agent.utils.client import MCPClient
+from agent.utils.llm_service import LLMService
 from agent.utils.logger import get_logger
 from mcp_server.server import mcp  # Direct import of local MCP server logic
+from agent.reasoning.intent_classification import _load_prompt as _ic_load_prompt
+from agent.reasoning.planning import _load_prompt as _plan_load_prompt
+from agent.reasoning.synthesis import _load_synthesis_prompt, _load_chitchat_prompt
 
 logger = get_logger(__name__)
 
@@ -24,12 +28,17 @@ async def lifespan(app: FastAPI):
     global agent_instance
     
     try:
-        # 1. Initialize Client with LOCAL server (no separate process needed)
-        client = MCPClient(server_instance=mcp)
+        # 1. Shared LLM service (reused by agent + MCP sampling handler)
+        llm = LLMService()
+
+        # 2. Initialize Client with LOCAL server (no separate process needed)
+        #    llm= wires the sampling handler so ctx.sample() calls in MCP tools
+        #    are forwarded back through the agent's OpenAI connection.
+        client = MCPClient(server_instance=mcp, llm=llm)
         await client.connect()  # Open persistent MCP session
-        
-        # 2. Initialize Agent
-        agent_instance = ClassQuizAgent(mcp_client=client)
+
+        # 3. Initialize Agent (reuse the same LLM instance)
+        agent_instance = ClassQuizAgent(mcp_client=client, llm=llm)
         await agent_instance.initialize()
         
         logger.info("✓ ClassQuiz API Ready: Agent connected to Local MCP Server")
@@ -243,6 +252,70 @@ async def debug_context(session_id: str):
         raise HTTPException(status_code=503, detail="Agent still initializing")
     state = await agent_instance.memory.get_state(session_id)
     return {"session_id": session_id, "state": state}
+
+
+@app.get("/debug/trace/{session_id}", tags=["debug"])
+async def debug_trace(session_id: str):
+    """
+    Return the full pipeline trace captured during the last process_query call
+    for the given session.  Includes intent, plan, tool_results, raw_response,
+    and any error that occurred.
+
+    Postman: GET http://localhost:5000/debug/trace/session_1234567890
+    """
+    if not agent_instance:
+        raise HTTPException(status_code=503, detail="Agent still initializing")
+    trace = agent_instance._traces.get(session_id)
+    if trace is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No trace found for session '{session_id}'. "
+                   "Run /chat first to generate one.",
+        )
+    return {"session_id": session_id, "trace": trace}
+
+
+@app.post("/debug/call-tool/{tool_name}", tags=["debug"])
+async def debug_call_tool(tool_name: str, body: dict = None):
+    """
+    Directly invoke a named MCP tool with the supplied params dict.
+    Returns the raw tool result without going through the full agent pipeline.
+
+    Postman:
+      POST http://localhost:5000/debug/call-tool/get_student_global_data
+      Body (raw JSON): {"student_id": "239645"}
+    """
+    if not agent_instance:
+        raise HTTPException(status_code=503, detail="Agent still initializing")
+    params = (body or {})
+    try:
+        result = await agent_instance.mcp_client.call_tool(tool_name, params)
+        return {"tool": tool_name, "params": params, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/debug/cache/clear", tags=["debug"])
+async def debug_cache_clear():
+    """
+    Bust the @lru_cache on all three prompt-loader functions so the next
+    request re-reads the .txt files from disk.  Use after editing any
+    prompt file without restarting the server.
+
+    Postman: POST http://localhost:5000/debug/cache/clear
+    """
+    _ic_load_prompt.cache_clear()
+    _plan_load_prompt.cache_clear()
+    _load_synthesis_prompt.cache_clear()
+    _load_chitchat_prompt.cache_clear()
+    return {
+        "cleared": [
+            "intent_classification._load_prompt",
+            "planning._load_prompt",
+            "synthesis._load_synthesis_prompt",
+            "synthesis._load_chitchat_prompt",
+        ]
+    }
 
 
 if __name__ == "__main__":

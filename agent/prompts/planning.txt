@@ -12,7 +12,7 @@ Today's date: {current_date}
 
 RULES:
 1. Only use tool names and param names from AVAILABLE TOOLS above.
-2. student_id is provided below — use it directly in params.
+2. student_id is ALWAYS the literal string "CURRENT_STUDENT" — never a real number. The system resolves it after your output.
 3. Give each task a short unique id (t1, t2, …).
 4. If task B needs output from task A, set "depends_on": "t1" and use "$t1.result.field" in params.
 5. If tasks are independent, set "depends_on": null — they run in parallel.
@@ -21,6 +21,7 @@ RULES:
 8. Use conversation history to resolve pronouns ("his", "ses", "lui") to the correct student/subject.
 9. For date-based tools, use today's date as reference. Dates must be ISO format (YYYY-MM-DD).
 10. NEGATIVE CONSTRAINT: If no student_id is provided, or the query does not request student-specific data, do NOT call any student tools. Return an empty tasks array.
+11. SECURITY RULE: You must use "CURRENT_STUDENT" verbatim. Never guess or invent student IDs, UUIDs, or numeric identifiers. If you see a real ID in history, IGNORE IT — always write "CURRENT_STUDENT".
 
 OUTPUT FORMAT (strict JSON, nothing else):
 {{"reasoning": "…", "tasks": [{{"id": "t1", "tool": "tool_name", "params": {{…}}, "depends_on": null, "output_mapping": {{}}}}]}}
@@ -29,33 +30,38 @@ OUTPUT FORMAT (strict JSON, nothing else):
 
 Revised Query: "كيفاش ابني هذا الأسبوع؟"
 Entities: []
-Student ID: 239645
-{{"reasoning": "Global performance overview", "tasks": [{{"id": "t1", "tool": "get_student_global_data", "params": {{"student_id": "239645"}}, "depends_on": null, "output_mapping": {{}}}}]}}
+Student ID: CURRENT_STUDENT
+{{"reasoning": "General overview — compare all subjects", "tasks": [{{"id": "t1", "tool": "compare_subjects", "params": {{"student_id": "CURRENT_STUDENT"}}, "depends_on": null, "output_mapping": {{}}}}]}}
 
 Revised Query: "ابني كيفاش في الرياضيات والعربية؟"
 Entities: ["رياضيّات", "عربيّة"]
-Student ID: 239645
-{{"reasoning": "Two subject lookups — run in parallel. Math=4, Arabic=11.", "tasks": [{{"id": "t1", "tool": "get_subject_curriculum_progress", "params": {{"student_id": "239645", "subject_id": 4}}, "depends_on": null, "output_mapping": {{}}}}, {{"id": "t2", "tool": "get_subject_curriculum_progress", "params": {{"student_id": "239645", "subject_id": 11}}, "depends_on": null, "output_mapping": {{}}}}]}}
+Student ID: CURRENT_STUDENT
+{{"reasoning": "Two subject performance snapshots — run in parallel. Math=4, Arabic=11.", "tasks": [{{"id": "t1", "tool": "get_subject_performance", "params": {{"student_id": "CURRENT_STUDENT", "subject_id": 4}}, "depends_on": null, "output_mapping": {{}}}}, {{"id": "t2", "tool": "get_subject_performance", "params": {{"student_id": "CURRENT_STUDENT", "subject_id": 11}}, "depends_on": null, "output_mapping": {{}}}}]}}
 
 Revised Query: "وين يعاني ابني في العربية وشنوة تنصحني؟"
 Entities: ["عربيّة", "weaknesses"]
-Student ID: 239645
-{{"reasoning": "Get global stats, Arabic curriculum progress, and Arabic diagnostics in parallel", "tasks": [{{"id": "t1", "tool": "get_student_global_data", "params": {{"student_id": "239645"}}, "depends_on": null, "output_mapping": {{}}}}, {{"id": "t2", "tool": "get_subject_curriculum_progress", "params": {{"student_id": "239645", "subject_id": 11}}, "depends_on": null, "output_mapping": {{}}}}, {{"id": "t3", "tool": "get_diagnostics_and_recommendations", "params": {{"student_id": "239645", "subject_id": 11}}, "depends_on": null, "output_mapping": {{}}}}]}}
+Student ID: CURRENT_STUDENT
+{{"reasoning": "Arabic performance snapshot + a subject roadmap for remediation in parallel", "tasks": [{{"id": "t1", "tool": "get_subject_performance", "params": {{"student_id": "CURRENT_STUDENT", "subject_id": 11}}, "depends_on": null, "output_mapping": {{}}}}, {{"id": "t2", "tool": "get_subject_roadmap", "params": {{"student_id": "CURRENT_STUDENT", "subject_id": 11}}, "depends_on": null, "output_mapping": {{}}}}]}}
 
 Revised Query: "شنوة عمل ابني آخر مرة؟"
 Entities: ["activity"]
-Student ID: 239645
-{{"reasoning": "Get recent activity logs", "tasks": [{{"id": "t1", "tool": "get_daily_activity_logs", "params": {{"student_id": "239645", "limit": 10}}, "depends_on": null, "output_mapping": {{}}}}]}}
+Student ID: CURRENT_STUDENT
+{{"reasoning": "Get recent activity timeline", "tasks": [{{"id": "t1", "tool": "get_recent_activity", "params": {{"student_id": "CURRENT_STUDENT", "limit": 10}}, "depends_on": null, "output_mapping": {{}}}}]}}
 
 Revised Query: "chayma chaamla fi 9rayetha" (no subject specified — full overview)
 Entities: []
-Student ID: 239645
-{{"reasoning": "General overview question with no specific subject → full overview: global KPIs + all 4 main subjects curriculum progress in parallel", "tasks": [{{"id": "t1", "tool": "get_student_global_data", "params": {{"student_id": "239645"}}, "depends_on": null, "output_mapping": {{}}}}, {{"id": "t2", "tool": "get_subject_curriculum_progress", "params": {{"student_id": "239645", "subject_id": 4}}, "depends_on": null, "output_mapping": {{}}}}, {{"id": "t3", "tool": "get_subject_curriculum_progress", "params": {{"student_id": "239645", "subject_id": 11}}, "depends_on": null, "output_mapping": {{}}}}, {{"id": "t4", "tool": "get_subject_curriculum_progress", "params": {{"student_id": "239645", "subject_id": 3}}, "depends_on": null, "output_mapping": {{}}}}, {{"id": "t5", "tool": "get_subject_curriculum_progress", "params": {{"student_id": "239645", "subject_id": 10}}, "depends_on": null, "output_mapping": {{}}}}]}}
+Student ID: CURRENT_STUDENT
+{{"reasoning": "General overview: compare all subjects + study habits in parallel", "tasks": [{{"id": "t1", "tool": "compare_subjects", "params": {{"student_id": "CURRENT_STUDENT"}}, "depends_on": null, "output_mapping": {{}}}}, {{"id": "t2", "tool": "get_study_habits", "params": {{"student_id": "CURRENT_STUDENT"}}, "depends_on": null, "output_mapping": {{}}}}]}}
+
+Revised Query: "chnahwel chayma fel français"
+Entities: ["français"]
+Student ID: CURRENT_STUDENT
+{{"reasoning": "Query asks specifically about French (subject_id=10) → get performance snapshot", "tasks": [{{"id": "t1", "tool": "get_subject_performance", "params": {{"student_id": "CURRENT_STUDENT", "subject_id": 10}}, "depends_on": null, "output_mapping": {{}}}}]}}
 
 Revised Query: "ey nheb" (short affirmative — history shows assistant offered to discuss study routine)
 Entities: ["study_routine"]
-Student ID: 239645
-{{"reasoning": "User said yes to assistant's offer to discuss study routine → get global data for habits", "tasks": [{{"id": "t1", "tool": "get_student_global_data", "params": {{"student_id": "239645"}}, "depends_on": null, "output_mapping": {{}}}}, {{"id": "t2", "tool": "get_daily_activity_logs", "params": {{"student_id": "239645", "limit": 14}}, "depends_on": null, "output_mapping": {{}}}}]}}
+Student ID: CURRENT_STUDENT
+{{"reasoning": "User said yes to discuss study routine → get study habits + recent activity in parallel", "tasks": [{{"id": "t1", "tool": "get_study_habits", "params": {{"student_id": "CURRENT_STUDENT"}}, "depends_on": null, "output_mapping": {{}}}}, {{"id": "t2", "tool": "get_recent_activity", "params": {{"student_id": "CURRENT_STUDENT", "limit": 14}}, "depends_on": null, "output_mapping": {{}}}}]}}
 
 ===================
 

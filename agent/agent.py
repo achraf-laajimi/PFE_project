@@ -1,7 +1,10 @@
 """Core agent orchestrator — DAG-based parallel execution with memory"""
 
 import os
-from typing import Dict
+import re
+import json
+from datetime import datetime, timezone
+from typing import Dict, Any
 
 from dotenv import load_dotenv
 
@@ -16,6 +19,27 @@ from agent.utils.memory import MemoryManager
 load_dotenv()
 logger = get_logger(__name__)
 
+# ── PII patterns to scrub from LLM output ────────────────────────────────
+# Catches: 6-digit numeric IDs (239645), UUIDs, long numeric tokens
+_PII_PATTERNS = [
+    re.compile(r'\b\d{5,}\b'),                         # 5+ digit numeric ID
+    re.compile(r'\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b', re.I),  # UUID
+]
+_REDACTED = "[REDACTED]"
+
+
+def _redact_ids(text: str, student_id: str = None) -> str:
+    """
+    Remove technical identifiers from LLM output before delivery.
+    If a real student_id is known, redact it specifically first;
+    then apply pattern-based catch-all for other IDs / UUIDs.
+    """
+    if student_id:
+        text = text.replace(student_id, _REDACTED)
+    for pattern in _PII_PATTERNS:
+        text = pattern.sub(_REDACTED, text)
+    return text
+
 
 class ClassQuizAgent:
     """
@@ -28,13 +52,15 @@ class ClassQuizAgent:
       4. Synthesis                → natural-language response from results
     """
 
-    def __init__(self, mcp_client, llm_model: str = "gpt-4o-mini"):
+    def __init__(self, mcp_client, llm_model: str = "gpt-5-mini", llm: LLMService = None):
         self.mcp_client = mcp_client
-        self.llm = LLMService(model=llm_model)
+        self.llm = llm if llm is not None else LLMService(model=llm_model)
         redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
         self.memory = MemoryManager(redis_url=redis_url)
         self.tools_schema: Dict = {}
         self._executor: DAGExecutor | None = None
+        # Per-session pipeline traces for /debug/trace/<id>
+        self._traces: Dict[str, Dict[str, Any]] = {}
         logger.info("ClassQuizAgent initialized")
 
     # ── Startup ───────────────────────────────────────────────
@@ -85,16 +111,56 @@ class ClassQuizAgent:
         """
         logger.info(f"[{session_id}] Processing: {query}")
 
+        # ─ trace scaffold (filled in as we go) ───────────────────────────
+        trace: Dict[str, Any] = {
+            "session_id": session_id,
+            "query": query,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "history_text": None,
+            "intent": None,
+            "plan": None,
+            "tool_results": None,
+            "raw_response": None,
+            "final_response": None,
+            "error": None,
+        }
+
         try:
             # Gather recent context from memory
             history_text = await self.memory.format_for_prompt(session_id)
             recent_entities = await self.memory.get_recent_entities(session_id)
+            trace["history_text"] = history_text
 
             # ① Intent gate (LLM #1) ─── short-circuit chitchat / platform_info ──
             intent = classify_intent(query, self.llm, conversation_context=history_text)
+            trace["intent"] = {
+                "intent": intent.intent,
+                "confidence": intent.confidence,
+                "entities": intent.entities,
+                "revised_query": intent.revised_query,
+                "reasoning": intent.reasoning,
+            }
+
+            if intent.intent == "pii_request":
+                response = (
+                    "عذراً، لا يمكنني مشاركة المعرّفات الشخصية أو بيانات الحساب. "
+                    "إذا كنت بحاجة إلى دعم فني يرجى التواصل مع الإدارة."
+                )
+                trace["raw_response"] = response
+                trace["final_response"] = response
+                self._traces[session_id] = trace
+                await self.memory.add_turn(
+                    session_id, query, response,
+                    entities=[], intent="pii_request",
+                )
+                return self._ok(response, "pii_request", [])
 
             if intent.intent in ("chitchat", "platform_info"):
                 response = generate_chitchat_response(query, self.llm, history=history_text)
+                response = _redact_ids(response)  # soft guardrail
+                trace["raw_response"] = response
+                trace["final_response"] = response
+                self._traces[session_id] = trace
                 await self.memory.add_turn(
                     session_id, query, response,
                     entities=intent.entities, intent=intent.intent,
@@ -129,9 +195,21 @@ class ClassQuizAgent:
                 student_id=student_id,
                 history=history_text,
             )
+            trace["plan"] = {
+                "reasoning": plan.reasoning,
+                "tasks": [
+                    {"id": t.id, "tool": t.tool, "params": t.params,
+                     "depends_on": t.depends_on}
+                    for t in plan.tasks
+                ],
+            }
 
             if not plan.tasks:
                 response = generate_chitchat_response(query, self.llm, history=history_text)
+                response = _redact_ids(response)  # soft guardrail
+                trace["raw_response"] = response
+                trace["final_response"] = response
+                self._traces[session_id] = trace
                 await self.memory.add_turn(
                     session_id, query, response,
                     entities=intent.entities, intent="tool_required",
@@ -142,11 +220,24 @@ class ClassQuizAgent:
             if self._executor is None:
                 self._executor = DAGExecutor(self.mcp_client, self.tools_schema)
             tool_results = await self._executor.execute(plan.tasks)
+            trace["tool_results"] = [
+                {
+                    "tool": r.tool_name,
+                    "success": r.success,
+                    "result": r.data,
+                    "error": r.error,
+                }
+                for r in tool_results
+            ]
 
             # ④ Synthesis (LLM #3) ───────────────────────────────
-            response = synthesize_response(query, tool_results, self.llm, history=history_text)
-
+            raw_response = synthesize_response(query, tool_results, self.llm, history=history_text)
+            trace["raw_response"] = raw_response
+            # PII guardrail: scrub student IDs / UUIDs before the parent sees it
+            response = _redact_ids(raw_response, student_id=student_id)
+            trace["final_response"] = response
             tools_used = [t.tool for t in plan.tasks]
+            self._traces[session_id] = trace
             await self.memory.add_turn(
                 session_id, query, response,
                 entities=intent.entities, intent="tool_required",
@@ -156,6 +247,8 @@ class ClassQuizAgent:
 
         except Exception as e:
             logger.error(f"Error processing query: {e}", exc_info=True)
+            trace["error"] = str(e)
+            self._traces[session_id] = trace
             return {
                 "response": "عذراً، حدث خطأ في معالجة طلبك. يرجى المحاولة مرة أخرى.",
                 "intent": "error",

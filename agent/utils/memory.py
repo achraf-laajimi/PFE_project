@@ -320,11 +320,13 @@ class MemoryManager:
             state = await self.get_state(session_id)
             if state:
                 state_lines = ["[Session State]"]
-                
+
                 student_id = state.get("active_student")
                 if student_id:
-                    state_lines.append(f"Student: {student_id}")
-                
+                    # The planner resolves CURRENT_STUDENT → real ID after the
+                    # LLM call, so it never enters the model's context window.
+                    state_lines.append("Student: CURRENT_STUDENT")
+
                 subject = state.get("active_subject")
                 last_subject = state.get("last_subject")
                 if subject:
@@ -362,6 +364,22 @@ class MemoryManager:
             sections.append("\n".join(lines))
 
         return "\n\n".join(sections)
+
+    # ────────────────────────────────────────────────────────────────────────
+
+    async def get_student_id(self, session_id: str) -> Optional[str]:
+        """Return the real student_id from session state (used by planner, never by LLM)."""
+        state = await self.get_state(session_id)
+        student_id = state.get("active_student")
+        if student_id:
+            return student_id
+        # Fallback: scan recent turns for numeric entities
+        history = await self.get_history(session_id)
+        for turn in reversed(history):
+            for entity in turn.get("entities", []):
+                if str(entity).isdigit():
+                    return str(entity)
+        return None
 
     # ────────────────────────────────────────────────────────────────────────
 
