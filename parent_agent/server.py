@@ -8,14 +8,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime
 
-from agent.agent import ClassQuizAgent
-from agent.utils.client import MCPClient
-from agent.utils.llm_service import LLMService
-from agent.utils.logger import get_logger
-from mcp_server.server import mcp  # Direct import of local MCP server logic
-from agent.reasoning.intent_classification import _load_prompt as _ic_load_prompt
-from agent.reasoning.planning import _load_prompt as _plan_load_prompt
-from agent.reasoning.synthesis import _load_synthesis_prompt, _load_chitchat_prompt
+from parent_agent.agent import ClassQuizAgent
+from parent_agent.utils.mcp_client import MCPClient
+from parent_agent.utils.llm_service import LLMService
+from parent_agent.utils.logger import get_logger
+from parent_agent.reasoning.intent_classification import _load_prompt as _ic_load_prompt
+from parent_agent.reasoning.planning import _load_prompt as _plan_load_prompt
+from parent_agent.reasoning.synthesis import _load_synthesis_prompt, _load_chitchat_prompt
 
 logger = get_logger(__name__)
 
@@ -31,17 +30,17 @@ async def lifespan(app: FastAPI):
         # 1. Shared LLM service (reused by agent + MCP sampling handler)
         llm = LLMService()
 
-        # 2. Initialize Client with LOCAL server (no separate process needed)
+        # 2. Initialize HTTP MCP client with mandatory X-API-KEY.
         #    llm= wires the sampling handler so ctx.sample() calls in MCP tools
         #    are forwarded back through the agent's OpenAI connection.
-        client = MCPClient(server_instance=mcp, llm=llm)
+        client = MCPClient(llm=llm)
         await client.connect()  # Open persistent MCP session
 
         # 3. Initialize Agent (reuse the same LLM instance)
         agent_instance = ClassQuizAgent(mcp_client=client, llm=llm)
         await agent_instance.initialize()
         
-        logger.info("✓ ClassQuiz API Ready: Agent connected to Local MCP Server")
+        logger.info("✓ ClassQuiz API Ready: Agent connected to MCP over HTTP")
         
     except Exception as e:
         logger.error(f"✗ Startup failed: {e}")

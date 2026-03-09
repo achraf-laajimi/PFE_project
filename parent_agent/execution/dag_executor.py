@@ -5,9 +5,9 @@ import json
 import re
 from typing import Any, Dict, List
 
-from agent.reasoning.validation import validate_tool_params
-from agent.utils.logger import get_logger
-from agent.utils.schemas import TaskNode, ToolResult
+from parent_agent.reasoning.validation import validate_tool_params
+from parent_agent.utils.logger import get_logger
+from parent_agent.utils.schemas import TaskNode, ToolResult
 
 logger = get_logger(__name__)
 

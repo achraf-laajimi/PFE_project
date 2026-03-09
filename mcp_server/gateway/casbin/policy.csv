@@ -1,0 +1,6 @@
+p, parent_agent, get_student_identity, execute
+p, parent_agent, get_subject_performance, execute
+p, parent_agent, get_subject_roadmap, execute
+p, parent_agent, compare_subjects, execute
+p, parent_agent, get_study_habits, execute
+p, parent_agent, get_recent_activity, execute

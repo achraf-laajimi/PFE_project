@@ -8,7 +8,7 @@ from typing import Dict, Optional
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from agent.utils.logger import get_logger
+from parent_agent.utils.logger import get_logger
 
 # Load .env from agent/ directory (where the key lives)
 _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"

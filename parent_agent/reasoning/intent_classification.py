@@ -1,8 +1,8 @@
 """Intent classification"""
 
-from agent.utils.llm_service import LLMService
-from agent.utils.logger import get_logger
-from agent.utils.schemas import IntentClassification
+from parent_agent.utils.llm_service import LLMService
+from parent_agent.utils.logger import get_logger
+from parent_agent.utils.schemas import IntentClassification
 from functools import lru_cache
 from pathlib import Path
 

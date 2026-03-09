@@ -1,26 +1,13 @@
-"""
-MCP Client wrapper — supports both in-process (FastMCP instance)
-and remote (HTTP URL) transports.
-
-Usage in agent/server.py:
-    from mcp_server.server import mcp          # FastMCP instance
-    client = MCPClient(server_instance=mcp)    # in-process, no network
-    await client.connect()
-    tools = await client.list_tools()
-
-Sampling support:
-    When an MCP server calls ctx.sample(), the request travels back to this
-    client via the sampling handler.  The handler forwards it to the agent's
-    existing LLMService so the server stays model-agnostic.
-"""
+"""MCP Client wrapper using HTTP transport with mandatory X-API-KEY."""
 
 import asyncio
+import os
 from typing import Any, Dict, Optional
 
 from fastmcp import Client
 from fastmcp.client.sampling import RequestContext, SamplingMessage, SamplingParams
 
-from agent.utils.logger import get_logger
+from parent_agent.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -82,31 +69,37 @@ class MCPClient:
     Thin wrapper around fastmcp.Client that provides:
       - Persistent session (connect once, call many times)
       - Auto-connect on first call if connect() was not called
-      - Support for local FastMCP instance (in-process) or remote URL
+      - HTTP transport only (no in-process bypass)
       - Sampling handler wired to the agent's LLMService
     """
 
     def __init__(
         self,
-        server_instance=None,
         url: Optional[str] = None,
+        api_key: Optional[str] = None,
         llm=None,
     ):
-        # Build the sampling handler if an LLM service was provided
+        # Build the sampling handler if an LLM service was provided.
         sampling_handler = _make_sampling_handler(llm) if llm is not None else None
 
-        if server_instance is not None:
-            self._client = Client(
-                server_instance,
-                sampling_handler=sampling_handler,
+        mcp_url = url or os.getenv("MCP_SERVER_URL", "http://localhost:8000/mcp")
+        key = (api_key or os.getenv("MCP_GATEWAY_API_KEY") or "").strip()
+        if not key:
+            raise ValueError(
+                "Missing MCP API key."
             )
-            self._mode = "in-process"
-        else:
-            self._client = Client(
-                url or "http://localhost:8000/mcp",
-                sampling_handler=sampling_handler,
-            )
-            self._mode = "remote"
+
+        self._client = Client(
+            mcp_url,
+            sampling_handler=sampling_handler,
+        )
+        self._mode = "remote"
+
+        # Force API-key auth header on every MCP HTTP call.
+        transport_headers = getattr(self._client.transport, "headers", None)
+        if transport_headers is None:
+            raise RuntimeError("MCP transport does not support custom headers")
+        transport_headers["x-api-key"] = key
 
         self._connected = False
 

@@ -8,13 +8,13 @@ from typing import Dict, Any
 
 from dotenv import load_dotenv
 
-from agent.execution.dag_executor import DAGExecutor
-from agent.reasoning.intent_classification import classify_intent
-from agent.reasoning.planning import create_dag_plan
-from agent.reasoning.synthesis import synthesize_response, generate_chitchat_response
-from agent.utils.llm_service import LLMService
-from agent.utils.logger import get_logger
-from agent.utils.memory import MemoryManager
+from parent_agent.execution.dag_executor import DAGExecutor
+from parent_agent.reasoning.intent_classification import classify_intent
+from parent_agent.reasoning.planning import create_dag_plan
+from parent_agent.reasoning.synthesis import synthesize_response, generate_chitchat_response
+from parent_agent.utils.llm_service import LLMService
+from parent_agent.utils.logger import get_logger
+from parent_agent.utils.memory import MemoryManager
 
 load_dotenv()
 logger = get_logger(__name__)

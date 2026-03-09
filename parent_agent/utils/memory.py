@@ -30,7 +30,7 @@ from typing import Dict, List, Optional
 
 import redis.asyncio as redis
 
-from agent.utils.logger import get_logger
+from parent_agent.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

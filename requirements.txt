@@ -2,3 +2,4 @@ fastmcp
 openai
 python-dotenv
 redis
+casbin

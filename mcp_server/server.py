@@ -10,6 +10,7 @@ Start with:  python -m mcp_server.server
 from fastmcp import FastMCP, Context
 import asyncio
 from typing import Optional
+from mcp_server.gateway.middleware import enforce_tool_access
 from mcp_server.helpers.validation import is_valid_student_id
 
 from mcp_server.helpers.logger import get_logger
@@ -47,6 +48,8 @@ async def get_student_identity(student_id: str) -> dict:
     Use FIRST when the query references a student by name and you need to
     confirm their identity before calling any other tool.
     """
+    if sec := enforce_tool_access("get_student_identity", {"student_id": student_id}):
+        return sec
     if err := _check_student_id(student_id, "get_student_identity"):
         return err
     return await build_student_identity(student_id)
@@ -68,7 +71,12 @@ async def get_subject_performance(student_id: str, subject_id: int) -> dict:
 
     Example: "كيفاش أحمد في الفرنسية؟" → subject_id=10
     """
-    if err := _check_student_id(student_id, "get_subject_performance_snapshot"):
+    if sec := enforce_tool_access(
+        "get_subject_performance",
+        {"student_id": student_id, "subject_id": subject_id},
+    ):
+        return sec
+    if err := _check_student_id(student_id, "get_subject_performance"):
         return err
     return await build_subject_performance(student_id, subject_id)
 
@@ -86,6 +94,11 @@ async def get_subject_roadmap(student_id: str, subject_id: int, ctx: Context) ->
 
     Example: "recommandili roadmap bch tethassen fel français" → subject_id=10
     """
+    if sec := enforce_tool_access(
+        "get_subject_roadmap",
+        {"student_id": student_id, "subject_id": subject_id},
+    ):
+        return sec
     if err := _check_student_id(student_id, "get_subject_roadmap"):
         return err
     return await build_subject_roadmap(student_id, subject_id, ctx)
@@ -105,6 +118,8 @@ async def compare_subjects(student_id: str) -> dict:
 
     Example: "كيفاش أحمد في كل المواد؟"
     """
+    if sec := enforce_tool_access("compare_subjects", {"student_id": student_id}):
+        return sec
     if err := _check_student_id(student_id, "compare_subjects"):
         return err
     return await build_compare_subjects(student_id)
@@ -121,6 +136,8 @@ async def get_study_habits(student_id: str) -> dict:
 
     Example: "وقتاش يقرا أحمد؟"
     """
+    if sec := enforce_tool_access("get_study_habits", {"student_id": student_id}):
+        return sec
     if err := _check_student_id(student_id, "get_study_habits"):
         return err
     return await build_study_habits(student_id)
@@ -138,6 +155,11 @@ async def get_recent_activity(student_id: str, limit: int = 10) -> dict:
 
     Example: "شنوة خدم أحمد اليوم؟"
     """
+    if sec := enforce_tool_access(
+        "get_recent_activity",
+        {"student_id": student_id, "limit": limit},
+    ):
+        return sec
     if err := _check_student_id(student_id, "get_recent_activity"):
         return err
     return await build_recent_activity(student_id, limit)

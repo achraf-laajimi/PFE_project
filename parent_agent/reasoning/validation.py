@@ -2,7 +2,7 @@
 
 from typing import Dict, Any, Tuple
 
-from agent.utils.logger import get_logger
+from parent_agent.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

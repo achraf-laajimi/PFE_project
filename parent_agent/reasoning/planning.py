@@ -1,8 +1,8 @@
 """DAG-based tool planning (single LLM call → execution graph)"""
 
-from agent.utils.schemas import DAGPlan
-from agent.utils.llm_service import LLMService
-from agent.utils.logger import get_logger
+from parent_agent.utils.schemas import DAGPlan
+from parent_agent.utils.llm_service import LLMService
+from parent_agent.utils.logger import get_logger
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
