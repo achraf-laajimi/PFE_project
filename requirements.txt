@@ -3,3 +3,6 @@ openai
 python-dotenv
 redis
 casbin
+authlib
+rapidfuzz
+Unidecode

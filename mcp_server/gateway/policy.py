@@ -17,8 +17,8 @@ def _default_policy_path() -> Path:
 @lru_cache(maxsize=1)
 def get_enforcer() -> casbin.Enforcer:
 	"""Create and cache a Casbin enforcer instance."""
-	model_path = Path(str(_default_model_path()))
-	policy_path = Path(str(_default_policy_path()))
+	model_path = _default_model_path()
+	policy_path = _default_policy_path()
 	enforcer = casbin.Enforcer(str(model_path), str(policy_path))
 	logger.info(
 		"Casbin loaded | model=%s policy=%s",
@@ -28,11 +28,24 @@ def get_enforcer() -> casbin.Enforcer:
 	return enforcer
 
 
-def is_tool_allowed(agent: str, tool_name: str, action: str = "execute") -> bool:
-	"""Return True if the agent is allowed to execute the given tool."""
+def is_tool_allowed(
+	agent: str,
+	tool_name: str,
+	action: str = "execute",
+	parent_id: str = "",
+	requested_id: str = "",
+) -> bool:
+	"""Return True if the agent is allowed to execute the given tool + ABAC context."""
 	try:
-		return bool(get_enforcer().enforce(agent, tool_name, action))
+		return bool(get_enforcer().enforce(agent, tool_name, action, parent_id, requested_id))
 	except Exception as exc:  # noqa: BLE001
-		logger.error("Casbin enforce failure | agent=%s tool=%s err=%s", agent, tool_name, exc)
+		logger.error(
+			"Casbin enforce failure | agent=%s tool=%s parent_id=%s requested_id=%s err=%s",
+			agent,
+			tool_name,
+			parent_id,
+			requested_id,
+			exc,
+		)
 		return False
 

@@ -28,6 +28,8 @@ CLASSIFICATION RULES
 If the query explicitly asks for a student's ID, account number, phone, or any private credential:
 → pii_request  (override ALL other rules)
 
+Never trigger pii_request for academic/performance checks (e.g., "How is my son doing?").
+
 **Rule 1: Student Data Triggers**
 If the query asks about SPECIFIC academic information:
 - Progress, performance, scores, stars, mastery
@@ -57,10 +59,21 @@ Check the last assistant message:
 ENTITY EXTRACTION
 ═══════════════════════════════════════════
 
-Extract from the CURRENT query only:
-- Student names (Ahmed, Fatima, Chayma, Walid, etc.)
-- Kinship words as student references: وليدي, بنتي, ابني, weldi, benti
-- Subject names (رياضيات, عربية, math, Arabic, français, science)
+Identify and categorize from the CURRENT query only:
+- "student": Proper names (Ahmed, Fatima, Chayma, Walid, etc.)
+- "kinship": references (وليدي, بنتي, ابني, weldi, benti, child, son, daughter)
+- "subject": Academic topics (math, Arabic, français, science, english, رياضيات, etc.)
+
+Name Canonicalization Rules (GLOBAL):
+- For "student", always output ONE canonical form per person (deduplicated).
+- Normalize cross-language variants to the same student token when they refer to the same name.
+  Examples:
+  - "شيماء", "شيما", "Chayma", "Chaima", "Shayma" -> "Chayma"
+  - "أحمد", "Ahmed", "Ahmad" -> "Ahmed"
+  - "فاطمة", "Fatma", "Fatima" -> "Fatima"
+- Do not output both Arabic and Latin variants for the same person.
+- If uncertain between two different people, keep both in "student" instead of guessing.
+- Do NOT place subjects in "student" even if they look like names.
 
 Do NOT extract from conversation history.
 
@@ -74,10 +87,14 @@ Return ONLY valid JSON:
 {
   "intent": "chitchat|platform_info|tool_required|pii_request",
   "reasoning": "Brief explanation of why this intent was chosen",
-  "subject": null,
-  "entities": [],
+  "subject": "Main academic subject if applicable, else null",
+  "entities": {
+    "student": [],
+    "kinship": [],
+    "subject": []
+  },
   "confidence": 0.95,
-  "revised_query": "Restated query in English for tool use (tool_required only)"
+  "revised_query": "English version for tool use"
 }
 ```
 

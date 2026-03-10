@@ -28,6 +28,10 @@ _PERMANENT_ERRORS = (
     "invalid parameter",
     "unauthorized",
     "forbidden",
+    "invalid_token",
+    "status=401",
+    "missing_or_invalid_bearer_token",
+    "client is not connected",
 )
 
 

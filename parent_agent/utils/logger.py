@@ -24,6 +24,9 @@ def _configure_once() -> None:
         stream=sys.stdout,
     )
 
+    logging.getLogger("parent_agent.utils.mcp_client").setLevel(logging.DEBUG)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 
 def get_logger(name: str) -> logging.Logger:
     """Return a named logger, ensuring global config is applied."""

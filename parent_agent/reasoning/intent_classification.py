@@ -46,6 +46,7 @@ def classify_intent(query: str, llm: LLMService, conversation_context: str = "")
         )
         
         result_dict = llm.extract_json(response)
+        result_dict["entities"] = _normalize_entities_payload(result_dict.get("entities"))
         intent = IntentClassification(**result_dict)
         
         logger.info(f"Intent classified as: {intent.intent} (confidence: {intent.confidence})")
@@ -57,6 +58,24 @@ def classify_intent(query: str, llm: LLMService, conversation_context: str = "")
         return IntentClassification(
             intent="tool_required",
             reasoning=f"Failed to classify: {e}",
-            entities=[],
+            entities={"student": [], "kinship": [], "subject": []},
             confidence=0.5
         )
+
+
+def _normalize_entities_payload(raw_entities) -> dict:
+    """Coerce model output into entities buckets: student/kinship/subject."""
+    empty = {"student": [], "kinship": [], "subject": []}
+    if isinstance(raw_entities, dict):
+        return {
+            "student": [str(x).strip() for x in (raw_entities.get("student") or []) if str(x).strip()],
+            "kinship": [str(x).strip() for x in (raw_entities.get("kinship") or []) if str(x).strip()],
+            "subject": [str(x).strip() for x in (raw_entities.get("subject") or []) if str(x).strip()],
+        }
+
+    # Backward-compatible fallback: old list[str] -> assume student-like mentions.
+    if isinstance(raw_entities, list):
+        empty["student"] = [str(x).strip() for x in raw_entities if str(x).strip()]
+        return empty
+
+    return empty

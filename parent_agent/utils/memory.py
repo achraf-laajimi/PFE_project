@@ -82,7 +82,12 @@ class MemoryManager:
     async def close(self) -> None:
         """Close Redis connection gracefully."""
         if self.redis:
-            await self.redis.close()
+            # redis-py 5.x deprecates close() in favor of aclose().
+            if hasattr(self.redis, "aclose"):
+                await self.redis.aclose()
+            else:
+                await self.redis.close()
+            self.redis = None
             logger.info("[Memory] Redis connection closed")
 
     # ────────────────────────────────────────────────────────────────────────
@@ -326,6 +331,10 @@ class MemoryManager:
                     # The planner resolves CURRENT_STUDENT → real ID after the
                     # LLM call, so it never enters the model's context window.
                     state_lines.append("Student: CURRENT_STUDENT")
+
+                student_name = state.get("active_student_name")
+                if student_name:
+                    state_lines.append(f"Student Name: {student_name}")
 
                 subject = state.get("active_subject")
                 last_subject = state.get("last_subject")

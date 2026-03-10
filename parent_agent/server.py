@@ -1,10 +1,12 @@
 """FastAPI server connecting frontend to agent"""
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional, List
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 from pydantic import BaseModel
 from datetime import datetime
 
@@ -18,6 +20,9 @@ from parent_agent.reasoning.synthesis import _load_synthesis_prompt, _load_chitc
 
 logger = get_logger(__name__)
 
+# Load parent_agent/.env explicitly to avoid cwd-dependent behavior.
+load_dotenv(Path(__file__).with_name(".env"))
+
 # Global state
 agent_instance = None
 
@@ -30,7 +35,7 @@ async def lifespan(app: FastAPI):
         # 1. Shared LLM service (reused by agent + MCP sampling handler)
         llm = LLMService()
 
-        # 2. Initialize HTTP MCP client with mandatory X-API-KEY.
+        # 2. Initialize HTTP MCP client with mandatory JWT bearer auth.
         #    llm= wires the sampling handler so ctx.sample() calls in MCP tools
         #    are forwarded back through the agent's OpenAI connection.
         client = MCPClient(llm=llm)

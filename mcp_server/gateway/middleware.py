@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 import json
-import os
 from datetime import datetime, timezone
 from typing import Any, Optional
-from fastmcp.server.dependencies import get_http_headers
 from pydantic import BaseModel, Field, ValidationError
-from mcp_server.gateway.auth import authenticate_headers
+from mcp_server.gateway.auth import authenticate_request
 from mcp_server.gateway.policy import is_tool_allowed
 from mcp_server.helpers.logger import get_logger
 
@@ -30,11 +28,33 @@ class RecentActivityRequest(BaseModel):
 	limit: int = Field(default=10, ge=1, le=50)
 
 
-def _audit(event: str, *, agent: Optional[str], tool: str, status: str, detail: str = "") -> None:
+def _identity_audit_kwargs(identity) -> dict[str, Optional[str]]:
+	"""Shared audit fields derived from authenticated identity."""
+	return {
+		"parent_id": identity.parent_id,
+		"client_id": identity.client_id,
+		"token_id": identity.token_id,
+	}
+
+
+def _audit(
+	event: str,
+	*,
+	agent: Optional[str],
+	tool: str,
+	status: str,
+	detail: str = "",
+	parent_id: Optional[str] = None,
+	client_id: Optional[str] = None,
+	token_id: Optional[str] = None,
+) -> None:
 	payload = {
 		"ts": datetime.now(timezone.utc).isoformat(),
 		"event": event,
 		"agent": agent,
+		"parent_id": parent_id,
+		"client_id": client_id,
+		"token_id": token_id,
 		"tool": tool,
 		"status": status,
 		"detail": detail,
@@ -69,34 +89,54 @@ def _validate_tool_input(tool_name: str, params: dict[str, Any]) -> Optional[str
 
 def enforce_tool_access(tool_name: str, params: dict[str, Any]) -> Optional[dict]:
 	"""Run auth + policy + validation checks before tool logic executes."""
-	headers = get_http_headers(include_all=False)
-
-	agent, reason = authenticate_headers(headers)
-	if not agent:
+	identity, reason = authenticate_request()
+	if identity is None:
 		_audit("tool_auth", agent=None, tool=tool_name, status="denied", detail=reason)
-		return {"error": "Unauthorized: missing or invalid API key."}
+		return {"error": f"Unauthorized: {reason}"}
 
-	if not is_tool_allowed(agent, tool_name, action="execute"):
+	requested_id = str(params.get("student_id") or "").strip()
+	parent_id = identity.parent_id or ""
+
+	if not is_tool_allowed(
+		identity.agent,
+		tool_name,
+		action="execute",
+		parent_id=parent_id,
+		requested_id=requested_id,
+	):
+		detail = "forbidden"
+		if requested_id in {"CURRENT_STUDENT", "UNKNOWN", ""}:
+			detail = "invalid student identity resolution"
 		_audit(
 			"tool_authorization",
-			agent=agent,
+			agent=identity.agent,
 			tool=tool_name,
 			status="denied",
-			detail="forbidden",
+			detail=detail,
+			**_identity_audit_kwargs(identity),
 		)
-		return {"error": "Forbidden: agent is not allowed to execute this tool."}
+		if requested_id in {"CURRENT_STUDENT", "UNKNOWN", ""}:
+			return {"error": "Invalid input: Please provide a specific numeric student_id."}
+		return {"error": "Forbidden: Access denied for this student identity."}
 
 	validation_error = _validate_tool_input(tool_name, params)
 	if validation_error:
 		_audit(
 			"tool_validation",
-			agent=agent,
+			agent=identity.agent,
 			tool=tool_name,
 			status="denied",
 			detail=validation_error,
+			**_identity_audit_kwargs(identity),
 		)
 		return {"error": f"Validation error: {validation_error}."}
 
-	_audit("tool_access", agent=agent, tool=tool_name, status="allowed")
+	_audit(
+		"tool_access",
+		agent=identity.agent,
+		tool=tool_name,
+		status="allowed",
+		**_identity_audit_kwargs(identity),
+	)
 	return None
 

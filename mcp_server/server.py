@@ -7,11 +7,18 @@ This file only registers tools with FastMCP and delegates to those modules.
 Start with:  python -m mcp_server.server
 """
 
-from fastmcp import FastMCP, Context
 import asyncio
+import contextlib
+from pathlib import Path
 from typing import Optional
+from dotenv import load_dotenv
+
+# Load mcp_server/.env before importing fastmcp so FastMCP settings are applied.
+load_dotenv(Path(__file__).with_name(".env"))
+
+from fastmcp import FastMCP, Context
+from mcp_server.gateway.auth import get_jwt_verifier
 from mcp_server.gateway.middleware import enforce_tool_access
-from mcp_server.helpers.validation import is_valid_student_id
 
 from mcp_server.helpers.logger import get_logger
 from mcp_server.tools.parent_agent_tools import (
@@ -25,17 +32,8 @@ from mcp_server.tools.parent_agent_tools import (
 
 logger = get_logger(__name__)
 
-mcp = FastMCP("CQ_MCP")
+mcp = FastMCP("CQ_MCP", auth=get_jwt_verifier())
 
-
-# ── Security guard ────────────────────────────────────────────────────────────
-
-def _check_student_id(student_id: str, tool_name: str) -> Optional[dict]:
-    """Return an error dict if student_id is invalid, else None."""
-    if not is_valid_student_id(student_id):
-        logger.error(f"[Security] {tool_name}: unresolved alias '{student_id}'")
-        return {"error": "Internal error: student identity could not be resolved."}
-    return None
 
 
 # ── TIER 1 — Identity ─────────────────────────────────────────────────────────
@@ -50,8 +48,6 @@ async def get_student_identity(student_id: str) -> dict:
     """
     if sec := enforce_tool_access("get_student_identity", {"student_id": student_id}):
         return sec
-    if err := _check_student_id(student_id, "get_student_identity"):
-        return err
     return await build_student_identity(student_id)
 
 
@@ -76,8 +72,6 @@ async def get_subject_performance(student_id: str, subject_id: int) -> dict:
         {"student_id": student_id, "subject_id": subject_id},
     ):
         return sec
-    if err := _check_student_id(student_id, "get_subject_performance"):
-        return err
     return await build_subject_performance(student_id, subject_id)
 
 
@@ -99,8 +93,6 @@ async def get_subject_roadmap(student_id: str, subject_id: int, ctx: Context) ->
         {"student_id": student_id, "subject_id": subject_id},
     ):
         return sec
-    if err := _check_student_id(student_id, "get_subject_roadmap"):
-        return err
     return await build_subject_roadmap(student_id, subject_id, ctx)
 
 
@@ -120,8 +112,6 @@ async def compare_subjects(student_id: str) -> dict:
     """
     if sec := enforce_tool_access("compare_subjects", {"student_id": student_id}):
         return sec
-    if err := _check_student_id(student_id, "compare_subjects"):
-        return err
     return await build_compare_subjects(student_id)
 
 
@@ -138,8 +128,6 @@ async def get_study_habits(student_id: str) -> dict:
     """
     if sec := enforce_tool_access("get_study_habits", {"student_id": student_id}):
         return sec
-    if err := _check_student_id(student_id, "get_study_habits"):
-        return err
     return await build_study_habits(student_id)
 
 
@@ -160,8 +148,6 @@ async def get_recent_activity(student_id: str, limit: int = 10) -> dict:
         {"student_id": student_id, "limit": limit},
     ):
         return sec
-    if err := _check_student_id(student_id, "get_recent_activity"):
-        return err
     return await build_recent_activity(student_id, limit)
 
 
@@ -173,4 +159,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    with contextlib.suppress(KeyboardInterrupt): asyncio.run(main())

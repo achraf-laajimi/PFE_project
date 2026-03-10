@@ -9,7 +9,9 @@ class IntentClassification(BaseModel):
     intent: Literal["chitchat", "platform_info", "tool_required", "pii_request"]
     reasoning: str
     subject: Optional[str] = None
-    entities: List[str] = Field(default_factory=list)
+    entities: Dict[str, List[str]] = Field(
+        default_factory=lambda: {"student": [], "kinship": [], "subject": []}
+    )
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     revised_query: Optional[str] = None  # Expanded query for anaphora resolution / planner input
 

@@ -150,7 +150,7 @@ def generate_chitchat_response(query: str, llm: LLMService, history: str = "") -
     try:
         response = llm.generate(
             prompt=prompt,
-            temperature=0.5,
+            temperature=0.7,
             max_tokens=800
         )
 
